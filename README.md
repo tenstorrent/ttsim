@@ -75,6 +75,31 @@ gaps, but this will take time. Error messages will include one of the following 
   or configuration files
 - **AssertionFailure**: Internal simulator bug
 
+### Numerical Accuracy
+`ttsim` is designed to provide **bit-exact** numerical results relative to silicon for all
+computations, floating point and otherwise. The goal is to match all hardware computations
+bit-for-bit across all instructions, opcodes, functional units, and special cases, including
+the precise bit representation of NaNs produced by operations. While bugs are inevitable and
+some code paths are not yet bit-exact, this fidelity is the intended target.
+
+While most code will achieve bit-exact results, cases that can produce divergent results include:
+- Computations with timing-dependent variation in operand order.
+- Reads from hardware entropy sources or random number generators.
+- Reads from performance counters, cycle counters, or timers.
+- Missing synchronization, cache flushes, or memory fences.
+- Execution of UndefinedBehavior or UnpredictableValue cases.
+- Any other violations of ISA specification requirements.
+
+For timing-dependent computations, `ttsim` may evaluate operations in any order permitted by
+software synchronization. This may include operation orders that are extremely unlikely on silicon.
+To ensure an exact match with silicon, avoid algorithms where the runtime order of operations
+affects the result. For example, floating-point reductions using addition will diverge unless each
+addition is explicitly serialized in a deterministic order.
+
+Current implementation status within the simulated Tensix:
+- SFPU: believed to be fully bit-accurate.
+- Unpacker, FPU, and packer: not yet bit-accurate, but planned to be fixed to the extent possible.
+
 ## Contributing
 We welcome bug reports and feature requests! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
