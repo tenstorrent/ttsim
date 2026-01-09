@@ -97,8 +97,9 @@ affects the result. For example, floating-point reductions using addition will d
 addition is explicitly serialized in a deterministic order.
 
 Current implementation status within the simulated Tensix:
-- SFPU: believed to be fully bit-accurate.
-- Unpacker, FPU, and packer: not yet bit-accurate, but planned to be fixed to the extent possible.
+- Unpacker, SFPU, and packer: believed to be fully bit-accurate.
+- FPU MOV* and GMPOOL opcodes: believed to be fully bit-accurate.
+- FPU ELW*, MVMUL, and GAPOOL opcodes: not yet bit-accurate, but planned to be fixed to the extent possible.
 
 ## Contributing
 We welcome bug reports and feature requests! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
