@@ -61,9 +61,12 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/programming_examples/metal_example_add_2_i
 ```
 
 ## Known Issues
-**Fast dispatch is not working.** You must set `TT_METAL_SLOW_DISPATCH_MODE=1`.
+**Fast dispatch is not working**, though work is in progress to support it. You must set
+`TT_METAL_SLOW_DISPATCH_MODE=1`.
 
-There are a variety of unimplemented features in the simulator at present. We are working to fill in the
+SFPLOADMACRO is not supported in the SFPU.
+
+There are a variety of other unimplemented features in the simulator at present. We are working to fill in the
 gaps, but this will take time. Error messages will include one of the following categories:
 - **UndefinedBehavior, UnpredictableValueUsed, NonContractualBehavior**: See
   [tt-isa-documentation glossary](https://github.com/tenstorrent/tt-isa-documentation/blob/main/Glossary.md)
