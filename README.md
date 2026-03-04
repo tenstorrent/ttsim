@@ -15,7 +15,7 @@ code in the future under the Apache License. Visit the [latest release page](htt
 to download the latest version.
 
 ## Chip Status
-- **Wormhole/Blackhole**: Can run many tt-metal and ttnn examples/tests in slow dispatch mode. 
+- **Wormhole/Blackhole**: Can run many tt-metal and ttnn examples/tests in slow dispatch mode.
   Can also run numerous LLK tests. Overall, Wormhole is in more mature shape than Blackhole.
 
 ## Getting Started
@@ -64,8 +64,9 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/programming_examples/metal_example_add_2_i
 **Fast dispatch is not working**, though work is in progress to support it. You must set
 `TT_METAL_SLOW_DISPATCH_MODE=1`.
 
-SFPLOADMACRO is not supported in the SFPU. Work to provide a way to run with SFPLOADMACRO usage
-disabled is tracked here: https://github.com/tenstorrent/tt-llk/issues/1241
+SFPLOADMACRO is not supported in the SFPU. Set `TT_METAL_DISABLE_SFPLOADMACRO=1` to disable its usage.
+Not all kernels support this flag at present; progress to support this flag across all kernels is tracked here:
+https://github.com/tenstorrent/tt-llk/issues/1241
 
 There are a variety of other unimplemented features in the simulator at present. We are working to fill in the
 gaps, but this will take time. Error messages will include one of the following categories:
@@ -109,7 +110,7 @@ Current implementation status within the simulated Tensix:
 ## Contributing
 We welcome bug reports and feature requests! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-**Note:** We do not accept pull requests. All development happens in an internal repository, and this 
+**Note:** We do not accept pull requests. All development happens in an internal repository, and this
 public repository contains filtered binary releases. Please file issues for bugs or suggestions.
 
 ## Support and Issues
