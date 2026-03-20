@@ -15,8 +15,9 @@ code in the future under the Apache License. Visit the [latest release page](htt
 to download the latest version.
 
 ## Chip Status
-- **Wormhole/Blackhole**: Can run many tt-metal and ttnn examples/tests in slow dispatch mode.
-  Can also run numerous LLK tests. Overall, Wormhole is in more mature shape than Blackhole.
+- **Wormhole/Blackhole**: Nearing feature complete, with a small number of remaining features and
+  bugs under active debug. Can run many tt-metal, ttnn, and tt-forge examples/tests in slow dispatch
+  mode. Can also run numerous LLK tests.
 
 ## Getting Started
 
