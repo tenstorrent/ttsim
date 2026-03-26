@@ -66,8 +66,6 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/programming_examples/metal_example_add_2_i
 `TT_METAL_SLOW_DISPATCH_MODE=1`.
 
 SFPLOADMACRO is not supported in the SFPU. Set `TT_METAL_DISABLE_SFPLOADMACRO=1` to disable its usage.
-Not all kernels support this flag at present; progress to support this flag across all kernels is tracked here:
-https://github.com/tenstorrent/tt-llk/issues/1241
 
 There are a variety of other unimplemented features in the simulator at present. We are working to fill in the
 gaps, but this will take time. Error messages will include one of the following categories:
