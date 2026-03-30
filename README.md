@@ -102,8 +102,7 @@ addition is explicitly serialized in a deterministic order.
 
 Current implementation status within the simulated Tensix:
 - Unpacker, SFPU, and packer: believed to be fully bit-accurate.
-- FPU MOV* and GMPOOL opcodes: believed to be fully bit-accurate.
-- FPU ELW* opcodes: some modes believed to be fully bit-accurate, some modes still under active debug.
+- FPU MOV*, ELW*, and GMPOOL opcodes: believed to be fully bit-accurate.
 - FPU MVMUL and GAPOOL opcodes: not yet bit-accurate, but planned to be fixed to the extent possible.
 
 ## Contributing
