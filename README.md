@@ -1,9 +1,9 @@
 # ttsim, a fast full-system simulator of Tenstorrent hardware
 
-`ttsim` provides a virtual Wormhole or Blackhole device that can run on any Linux/x86_64
-system, even without Tenstorrent silicon present. It is slower than silicon but still fast
-enough that you can run interesting workloads with good productivity, allowing you to explore
-and experiment with Tenstorrent's hardware and programming model before purchasing silicon.
+`ttsim` provides a virtual Wormhole or Blackhole device that can run on any Linux/x86_64 system
+(including Windows via WSL2), without Tenstorrent silicon required. It is slower than silicon but
+still fast enough that you can run interesting workloads with good productivity, allowing you to
+explore and experiment with Tenstorrent's hardware and programming model before purchasing silicon.
 
 Each simulator consists of a single `libttsim.so` file compiled for a specific chip architecture
 (Wormhole or Blackhole). This library exports a simple API that [TT-Metalium](https://github.com/tenstorrent/tt-metal)
