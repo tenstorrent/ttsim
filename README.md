@@ -83,10 +83,11 @@ gaps, but this will take time. Error messages will include one of the following 
 `ttsim` is designed to provide **bit-exact** numerical results relative to silicon for all
 computations, floating point and otherwise. The goal is to match all hardware computations
 bit-for-bit across all instructions, opcodes, functional units, and special cases, including
-the precise bit representation of NaNs produced by operations. While bugs are inevitable and
-some code paths are not yet bit-exact, this fidelity is the intended target.
+the precise bit representation of NaNs produced by operations. While bugs are inevitable, since
+testing can never be fully exhaustive, all known operations and code paths are verified and
+believed to be fully bit-accurate in the Wormhole and Blackhole simulators.
 
-While most code will achieve bit-exact results, cases that can produce divergent results include:
+Most code will achieve bit-exact results, but cases that can produce divergent results include:
 - Computations with timing-dependent variation in operand order.
 - Reads from hardware entropy sources or random number generators.
 - Reads from performance counters, cycle counters, or timers.
@@ -99,11 +100,6 @@ software synchronization. This may include operation orders that are extremely u
 To ensure an exact match with silicon, avoid algorithms where the runtime order of operations
 affects the result. For example, floating-point reductions using addition will diverge unless each
 addition is explicitly serialized in a deterministic order.
-
-Current implementation status within the simulated Tensix:
-- Unpacker, SFPU, and packer: believed to be fully bit-accurate.
-- FPU MOV*, ELW*, and GMPOOL opcodes: believed to be fully bit-accurate.
-- FPU MVMUL and GAPOOL opcodes: not yet bit-accurate, but planned to be fixed to the extent possible.
 
 ## Contributing
 We welcome bug reports and feature requests! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
