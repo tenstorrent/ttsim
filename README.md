@@ -67,8 +67,9 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/programming_examples/metal_example_add_2_i
 
 SFPLOADMACRO is not supported in the SFPU. Set `TT_METAL_DISABLE_SFPLOADMACRO=1` to disable its usage.
 
-There are a variety of other unimplemented features in the simulator at present. We are working to fill in the
-gaps, but this will take time. Error messages will include one of the following categories:
+Not all hardware features are implemented, and the simulator is intentionally more restrictive than silicon
+to help uncover potential issues. Simulator error messages are grouped into the following categories
+to indicate whether the simulator or the software being simulated is at fault:
 - **UndefinedBehavior, UnpredictableValueUsed, NonContractualBehavior**: See
   [tt-isa-documentation glossary](https://github.com/tenstorrent/tt-isa-documentation/blob/main/Glossary.md)
 - **UntestedFunctionality**: Feature is implemented but lacks sufficient test coverage to be enabled
