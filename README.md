@@ -16,8 +16,7 @@ to download the latest version.
 
 ## Chip Status
 - **Wormhole/Blackhole**: Nearing feature complete, with a small number of remaining features and
-  bugs under active debug. Can run many tt-metal, ttnn, and tt-forge examples/tests in slow dispatch
-  mode. Can also run numerous LLK tests.
+  bugs under active debug. Can run many tt-metal, ttnn, tt-forge, and LLK examples/tests.
 
 ## Getting Started
 
@@ -62,8 +61,8 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/programming_examples/metal_example_add_2_i
 ```
 
 ## Known Issues
-**Fast dispatch is not working**, though work is in progress to support it. You must set
-`TT_METAL_SLOW_DISPATCH_MODE=1`.
+**Fast dispatch is not working**. The simulator side is believed to be functioning and correct,
+but some tt-metal fixes are not yet merged. You must set `TT_METAL_SLOW_DISPATCH_MODE=1`.
 
 SFPLOADMACRO is not supported in the SFPU. Set `TT_METAL_DISABLE_SFPLOADMACRO=1` to disable its usage.
 
