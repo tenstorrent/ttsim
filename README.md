@@ -104,11 +104,21 @@ to indicate whether the simulator or the software being simulated is at fault:
 - **AssertionFailure**: Internal simulator bug
 
 ## Simulator Behavior Contract
-`ttsim` is not just a simulator: it is also the official golden reference implementation of the
-Tenstorrent ISA contract, designed to a level of rigor that supports pre-silicon validation in
-safety-critical and regulated workflows (e.g. ISO 26262/DO-254). The future public source release,
-the strict spec/simulator coupling, and the explicit conformance taxonomy are all aimed at
-customers who need evidence, not promises.
+`ttsim` serves both as a general-purpose pre-silicon AI accelerator simulator and as the official
+golden reference implementation of the Tenstorrent ISA contract, designed to a level of rigor that
+supports pre-silicon validation in safety-critical and regulated workflows (e.g. ISO 26262, DO-254,
+IEC 62304/FDA software-as-medical-device guidance). The future public source release, the strict
+spec/simulator coupling, and the explicit conformance taxonomy are all aimed at customers who need
+evidence, not promises.
+
+Beyond regulated industries specifically, the same discipline underpins the long-horizon
+commitments enterprise deployments depend on: software portability and forwards/backwards
+compatibility across silicon revisions, clear expectations about output stability for shipped AI
+workloads across silicon updates, and defensible root-cause analysis when a customer investigates a
+production incident or responds to an external audit. Each of these rests on the architecture being
+precise about what is and isn't part of its contract - which is exactly what the
+`UndefinedBehavior`/`NonContractualBehavior`/`UnsupportedFunctionality` taxonomy provides, and
+exactly what `ttsim`'s strict enforcement protects.
 
 ### Numerical Accuracy
 `ttsim` is designed to provide **bit-exact** numerical results relative to silicon for all
