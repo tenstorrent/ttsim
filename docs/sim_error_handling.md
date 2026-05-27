@@ -168,7 +168,7 @@ both.
 
 Beyond the direct cost, certain simulator optimizations are *structurally foreclosed* once
 invariants are no longer guaranteed downstream. A code path that maps cleanly onto AVX-512 SIMD
-under the current invariants -- aligned addresses, in-range indices, deterministic format states --
+under the current invariants - aligned addresses, in-range indices, deterministic format states -
 can become unnatural or inefficient if those invariants are no longer guaranteed. The optimization
 is not just slower; it is no longer the right shape to write. Future performance work that would
 have been possible under the current discipline is no longer available.
@@ -189,7 +189,7 @@ permissive-mode behavior. The current "one configuration, fully tested" property
 simplification that disappears as soon as suppressions become independently configurable.
 
 Every supported configuration also becomes an ongoing engineering commitment. Issues filed against
-permissive-mode behavior require triage, investigation, and either fixing or formally declining --
+permissive-mode behavior require triage, investigation, and either fixing or formally declining -
 each of which is engineering work. The simulator team's capacity is finite; every commitment to
 maintain an additional configuration competes against other work (specification, new-chip support,
 performance, validation).
