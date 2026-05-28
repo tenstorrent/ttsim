@@ -98,10 +98,9 @@ mode of operation. Set `TT_METAL_SLOW_DISPATCH_MODE=1` to enable it.
 SFPLOADMACRO is not supported in the SFPU. Set `TT_METAL_DISABLE_SFPLOADMACRO=1` to disable its usage.
 
 Quasar support is in early stages and testing is incomplete. The unit_tests_legacy test listed above was
-validated against tt-metal commit `d28e155c06197bd11a1b50b5612d55ca1014d739`; a regression on more recent
-tt-metal main is under investigation, so pin to this commit when trying the Quasar flow. A fix is tracked
-at https://github.com/tenstorrent/tt-umd/pull/2644. Additionally, tests exercising the NOC currently
-require commenting out `#define NOC_API_V2` in `tt_metal/hw/inc/internal/tt-2xx/quasar/noc_nonblocking_api.h`.
+validated against tt-metal commit `ad73db77a3e135d225f9efe333e45ef9810387b0`, with `#define NOC_API_V2`
+commented out in `tt_metal/hw/inc/internal/tt-2xx/quasar/noc_nonblocking_api.h`. Most QSR tests, including
+this one, currently require disabling `NOC_API_V2`.
 
 Not all hardware features are implemented, and the simulator is intentionally more restrictive than silicon
 to help uncover potential issues. Simulator error messages are grouped into the following categories
