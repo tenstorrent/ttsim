@@ -2,26 +2,9 @@
 # SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+# Generates _out/{chip}/tensix_decode.h from data/{chip}/tensix_isa.json.
 import argparse
 import json
-
-# Add instructions to this table once we have confirmed that we have the field sizes exactly correct
-fully_decoded_instructions = {
-    'MOVD2A',
-    'MOVD2B',
-    'GATESRCRST',
-    'CLEARDVALID',
-    'SETRWC',
-    'INCRWC',
-    'ADDDMAREG',
-    'MULDMAREG',
-    'SETADCXX',
-    'DMANOP',
-    'SFPLOAD',
-    'SFPSTORE',
-    'ATGETM',
-    'ATRELM',
-}
 
 def main():
     parser = argparse.ArgumentParser()
@@ -62,7 +45,7 @@ def main():
             f.write(f'#define TENSIX_DECODER_{name}() \\\n')
             f.write(f'    static bool tensix_decode_{name.lower()}(TensixState *p_tensix, uint32_t pipe, uint32_t inst) {{ \\\n')
             if unused_arg_bits:
-                if args.chip in {'wh', 'bh'} and name in fully_decoded_instructions:
+                if args.chip in {'wh', 'bh'}:
                     f.write(f'        TTSIM_VERIFY(!(inst & 0x{unused_arg_bits:06X}), UndefinedBehavior, "invalid opcode bits set in inst=0x%x", inst); \\\n')
                 else:
                     f.write(f'        TTSIM_VERIFY(!(inst & 0x{unused_arg_bits:06X}), UnimplementedFunctionality, "inst=0x%x", inst); \\\n')

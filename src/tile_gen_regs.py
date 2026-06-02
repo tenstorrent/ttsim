@@ -6,8 +6,32 @@
 # The JSON files are produced (and maintained) by scripts/parse_tile_regs.py.
 import argparse
 import json
+from typing import TextIO
 
-def main():
+def reg_case_values(module_name: str, reg: dict) -> list[str]:
+    reg_name = reg['name']
+    prefixed_name = f'{module_name.upper()}_{reg_name.upper()}'
+    array_size = reg.get('array_size')
+    if array_size is None:
+        return [prefixed_name]
+    return [f'{prefixed_name}({i})' for i in range(array_size)]
+
+def write_default_cases_macro(f: TextIO, module_name: str, suffix: str, rw_filter: str, regs: list[dict]) -> None:
+    case_lines = [f'#define {module_name.upper()}_{suffix}_DEFAULT_CASES()']
+    for reg in regs:
+        rw = reg['rw']
+        if rw is not None and rw != rw_filter:
+            continue
+        unsupported = reg.get('unsupported', False)
+        category = 'UnsupportedFunctionality' if unsupported else 'UnimplementedFunctionality'
+        message = reg['name'].upper()
+        case_lines += [f'    case {case}:' for case in reg_case_values(module_name, reg)]
+        case_lines.append(f'        TTSIM_ERROR({category}, "{message}");')
+
+    f.write(' \\\n'.join(case_lines))
+    f.write('\n\n')
+
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--chip', action='store', required=True)
     parser.add_argument('--out', action='store', required=True)
@@ -41,6 +65,12 @@ def main():
                 if reset_value is not None:
                     f.write(f'#define {module_name.upper()}_{reg_name.upper()}_RESET_VALUE 0x{reset_value:X}\n')
             f.write('\n')
+
+        for module in data['regs']:
+            module_name = module['name']
+            if module_name in {'riscv_tdma_regs', 'riscv_debug_regs'}:
+                write_default_cases_macro(f, module_name, 'RD', 'wo', module['regs'])
+                write_default_cases_macro(f, module_name, 'WR', 'ro', module['regs'])
 
 if __name__ == '__main__':
     main()

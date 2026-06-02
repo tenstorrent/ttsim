@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// Definitions of the central global simulator state and shared runtime utilities (logging, etc.).
 #include <inttypes.h>
 #include <stdarg.h>
 #include <time.h>

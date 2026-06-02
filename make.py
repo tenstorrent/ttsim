@@ -264,7 +264,7 @@ class Task:
         self.allow_output = allow_output
         self.output_exclude = output_exclude
         self.latency = latency
-        self.priority = 0
+        self.priority = -1 # "unvisited" sentinel priority; zero is a valid computed priority
         self.path = path
         self.lineno = lineno
 

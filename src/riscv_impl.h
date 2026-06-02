@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// RISC-V instruction implementations, parametric on XLEN (instantiated by rv32.cpp and rv64.cpp).
 // Quick references:
 // https://csg.csail.mit.edu/6.375/6_375_2019_www/resources/riscv-spec.pdf
 // https://five-embeddev.com/quickref/isa_ext.html
 
 #include "sim.h"
+#include "riscv_defines.h"
 #include <algorithm>
 #include <type_traits>
 
@@ -20,6 +22,7 @@
 #define X_SP 2
 
 #define HAS_ZBA_ZBB ((TT_ARCH_VERSION >= 1) || (XLEN == 64))
+#define HAS_ZBC (XLEN == 64)
 #define HAS_ZBS (XLEN == 64)
 #define HAS_PACK_BREV8 ((TT_ARCH_VERSION >= 1) && (XLEN == 32)) // small subset of Zbkb that is in BH babyrisc
 
@@ -88,6 +91,38 @@ static inline uint_xlen_t mulhu(uint_xlen_t src0, uint_xlen_t src1) {
                         uint_2_times_xlen_t(src1)) >> XLEN);
 }
 
+#if HAS_ZBC
+static inline uint_xlen_t clmul(uint_xlen_t src0, uint_xlen_t src1) {
+    uint_xlen_t value = 0;
+    for (uint32_t i = 0; i < XLEN; i++) {
+        if ((src1 >> i) & 1) {
+            value ^= src0 << i;
+        }
+    }
+    return value;
+}
+
+static inline uint_xlen_t clmulh(uint_xlen_t src0, uint_xlen_t src1) {
+    uint_xlen_t value = 0;
+    for (uint32_t i = 1; i < XLEN; i++) {
+        if ((src1 >> i) & 1) {
+            value ^= src0 >> (XLEN - i);
+        }
+    }
+    return value;
+}
+
+static inline uint_xlen_t clmulr(uint_xlen_t src0, uint_xlen_t src1) {
+    uint_xlen_t value = 0;
+    for (uint32_t i = 0; i < XLEN; i++) {
+        if ((src1 >> i) & 1) {
+            value ^= src0 >> (XLEN - i - 1);
+        }
+    }
+    return value;
+}
+#endif
+
 static inline uint_xlen_t div(uint_xlen_t src0, uint_xlen_t src1) {
     if ((src0 == (uint_xlen_t(1) << (XLEN - 1)) && (src1 == ~uint_xlen_t(0)))) {
         return uint_xlen_t(1) << (XLEN - 1); // signed overflow
@@ -147,6 +182,11 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu)(RiscvHartState *p_hart
 #endif
 #if HAS_PACK_BREV8
         case ( 4 << 3) | 4: static_assert(XLEN == 32); value = (src0 & 0xFFFF) | (src1 << 16); break; // ZEXT.H + PACK
+#endif
+#if HAS_ZBC
+        case ( 5 << 3) | 1: value = clmul(src0, src1); break; // CLMUL
+        case ( 5 << 3) | 2: value = clmulr(src0, src1); break; // CLMULR
+        case ( 5 << 3) | 3: value = clmulh(src0, src1); break; // CLMULH
 #endif
 #if HAS_ZBS
         case (20 << 3) | 1: value = src0 | (uint_xlen_t(1) << (src1 & (XLEN - 1))); break; // BSET
@@ -232,7 +272,7 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu_imm)(RiscvHartState *p_
                 case 0x480 ... 0x480 + XLEN-1: value = (src >> (imm & (XLEN - 1))) & 1; break; // BEXTI
 #endif
 #if TT_ARCH_VERSION == 1
-                case 0x680 ... 0x686: case 0x688 ... 0x697: case 0x699 ... 0x69F: TTSIM_ERROR(UnsupportedFunctionality, "GREVI");
+                case 0x680 ... 0x686: case 0x688 ... 0x697: case 0x699 ... 0x69F: TTSIM_ERROR(UnsupportedFunctionality, "GREVI was removed from final Bitmanip spec");
 #endif
                 default: TTSIM_ERROR(UndefinedBehavior, "funct3=%d imm=0x%x", funct3, imm);
             }
@@ -244,6 +284,30 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu_imm)(RiscvHartState *p_
     if (r_dst) [[likely]] {
         p_hart->x_regs[r_dst] = value;
     }
+}
+
+template<bool neg_product, bool neg_addend> static void RV_XLEN_PREFIX(f_fma)(RiscvHartState *p_hart, uint32_t inst) {
+#if TT_ARCH_VERSION == 0
+    TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zfh/F/D/Q");
+#else
+    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+#endif
+}
+
+static void RV_XLEN_PREFIX(f_alu)(RiscvHartState *p_hart, uint32_t inst) {
+#if TT_ARCH_VERSION == 0
+    TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zfh/F/D/Q");
+#else
+    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+#endif
+}
+
+static void RV_XLEN_PREFIX(v_alu)(RiscvHartState *p_hart, uint32_t inst) {
+#if TT_ARCH_VERSION == 0
+    TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support V");
+#else
+    TTSIM_ERROR(UnsupportedFunctionality, "babyrisc non-compliant V extension is explicitly out of scope");
+#endif
 }
 
 static void dcache_access(RiscvHartState *p_hart, uint_xlen_t addr, bool store) {
@@ -346,6 +410,9 @@ template<class T> static void RV_XLEN_PREFIX(atomic)(RiscvHartState *p_hart, uin
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zaamo");
 #else
+    if constexpr (sizeof(T) == 8) {
+        TTSIM_ERROR(UntestedFunctionality, "64-bit atomic");
+    }
     uint32_t funct5 = bits<31,27>(inst); // aq/rl flags are ignored
     uint32_t r_addr = bits<19,15>(inst);
     uint32_t r_src = bits<24,20>(inst);
@@ -381,6 +448,48 @@ template<class T> static void RV_XLEN_PREFIX(atomic)(RiscvHartState *p_hart, uin
             p_hart->x_regs[r_dst] = old_val;
         }
     }
+#endif
+}
+
+template<class T> static void RV_XLEN_PREFIX(f_load)(RiscvHartState *p_hart, uint32_t inst) {
+#if TT_ARCH_VERSION == 0
+    TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zfh/F/D/Q");
+#else
+    if constexpr (sizeof(T) == 8) {
+        TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support D");
+    } else if constexpr (sizeof(T) == 16) {
+        TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support Q");
+    }
+    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+#endif
+}
+
+template<class T> static void RV_XLEN_PREFIX(f_store)(RiscvHartState *p_hart, uint32_t inst) {
+#if TT_ARCH_VERSION == 0
+    TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zfh/F/D/Q");
+#else
+    if constexpr (sizeof(T) == 8) {
+        TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support D");
+    } else if constexpr (sizeof(T) == 16) {
+        TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support Q");
+    }
+    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+#endif
+}
+
+template<class T> static void RV_XLEN_PREFIX(v_load)(RiscvHartState *p_hart, uint32_t inst) {
+#if TT_ARCH_VERSION == 0
+    TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support V");
+#else
+    TTSIM_ERROR(UnsupportedFunctionality, "babyrisc non-compliant V extension is explicitly out of scope");
+#endif
+}
+
+template<class T> static void RV_XLEN_PREFIX(v_store)(RiscvHartState *p_hart, uint32_t inst) {
+#if TT_ARCH_VERSION == 0
+    TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support V");
+#else
+    TTSIM_ERROR(UnsupportedFunctionality, "babyrisc non-compliant V extension is explicitly out of scope");
 #endif
 }
 
@@ -521,7 +630,7 @@ static void RV_XLEN_PREFIX(ecall_ebreak)(RiscvHartState *p_hart, uint32_t inst) 
 #if TT_ARCH_VERSION >= 1
 static uint_xlen_t read_csr(RiscvHartState *p_hart, uint32_t csr) {
     switch (csr) {
-        case 0x7C0: return p_hart->chicken_bits;
+        case CSR_CFG0: return p_hart->chicken_bits;
 #if TT_ARCH_VERSION == 1
         default: TTSIM_ERROR(UnsupportedFunctionality, "csr=0x%x", csr);
 #else
@@ -532,7 +641,7 @@ static uint_xlen_t read_csr(RiscvHartState *p_hart, uint32_t csr) {
 
 static void write_csr(RiscvHartState *p_hart, uint32_t csr, uint_xlen_t data) {
     switch (csr) {
-        case 0x7C0:
+        case CSR_CFG0:
 #if TT_ARCH_VERSION == 1
             TTSIM_VERIFY(!(data & ~0x104000A), UnsupportedFunctionality, "chicken_bits: data=0x%x", data);
 #else
@@ -692,11 +801,7 @@ static void RV_XLEN_PREFIX(tti)(RiscvHartState *p_hart, uint32_t inst) {
 }
 
 static void RV_XLEN_PREFIX(unimplemented)(RiscvHartState *p_hart, uint32_t inst) {
-#if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "could not decode instruction inst=0x%x at pc=0x%llx", inst, uint64_t(p_hart->pc - 4));
-#else
-    TTSIM_ERROR(UnimplementedFunctionality, "could not decode instruction inst=0x%x at pc=0x%llx", inst, uint64_t(p_hart->pc - 4));
-#endif
 }
 
 using DecodeAndExecuteFunc = void (*)(RiscvHartState *p_hart, uint32_t inst);

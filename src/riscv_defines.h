@@ -1,0 +1,27 @@
+// SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// RISC-V CSR numbers, opcode constants, and encoding helpers shared by the RV32/RV64 builds.
+#pragma once
+
+#define CSR_FFLAGS      0x001
+#define CSR_FRM         0x002
+#define CSR_FCSR        0x003
+#define CSR_MSTATUS     0x300
+#define CSR_MISA        0x301
+#define CSR_MEDELEG     0x302
+#define CSR_MIDELEG     0x303
+#define CSR_MIE         0x304
+#define CSR_MTVEC       0x305
+#define CSR_MCOUNTEREN  0x306
+#define CSR_MENVCFG     0x30A
+#define CSR_MSCRATCH    0x340
+#define CSR_MEPC        0x341
+#define CSR_MCAUSE      0x342
+#define CSR_MTVAL       0x343
+#define CSR_MIP         0x344
+#define CSR_CFG0        0x7C0
+#define CSR_MVENDORID   0xF11
+#define CSR_MARCHID     0xF12
+#define CSR_MIMPID      0xF13
+#define CSR_MHARTID     0xF14

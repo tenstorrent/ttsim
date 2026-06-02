@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// Per-architecture sizing constants (tile counts, channels, memory map) keyed by TT_ARCH_VERSION.
 // https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/hw/inc/wormhole/dev_mem_map.h
 // https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/hw/inc/wormhole/tensix.h
 // https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/hw/inc/wormhole/noc/noc_parameters.h
@@ -10,7 +11,7 @@
 #pragma once
 
 #if TT_ARCH_VERSION == 0
-#define NUM_DRAM_CHANNELS 6 // XXX technically it's 12 channels, 2 for each of the 6 DRAM tiles
+#define NUM_DRAM_CHANNELS 6 // technically it's 12 channels, 2 for each of the 6 DRAM tiles, but doesn't matter
 #define NUM_E_TILES 16
 #define NUM_T_TILES 80
 

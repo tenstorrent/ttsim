@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+# make.py build rules for src/: codegen, compile, and link the simulator per chip and config.
 CHIPS = [
     (0, 'wh'),
     (1, 'bh'),

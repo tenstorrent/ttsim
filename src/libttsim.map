@@ -4,6 +4,7 @@
 # libttsim.so exposes the device's physical I/O interfaces (e.g. PCIE, Ethernet).  These
 # symbols form a stable, binary-compatible API intended for long-term use; changes should
 # be rare and should always correspond to physical ports/connectivity on the device.
+# The API/ABI contract and compatibility policy are documented in docs/libttsim_api.md.
 {
     global:
         libttsim_init;
@@ -13,8 +14,8 @@
         libttsim_pci_config_wr32;
         libttsim_pci_mem_rd_bytes;
         libttsim_pci_mem_wr_bytes;
-        libttsim_tile_rd_bytes; # deprecated and will eventually be removed
-        libttsim_tile_wr_bytes; # deprecated and will eventually be removed
+        libttsim_tile_rd_bytes; # transitional; will eventually be removed (see docs/libttsim_api.md)
+        libttsim_tile_wr_bytes; # transitional; will eventually be removed (see docs/libttsim_api.md)
         libttsim_clock;
     local:
         *;

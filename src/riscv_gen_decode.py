@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+# Generates _out/riscv_decode.h from the RISC-V instruction encoding table defined below.
 riscv_decode_table = [
     (32, 0x0003, 0x707F, 'load<int8_t, int_xlen_t>'),    # LB
     (32, 0x1003, 0x707F, 'load<int16_t, int_xlen_t>'),   # LH
@@ -11,14 +12,14 @@ riscv_decode_table = [
     (32, 0x5003, 0x707F, 'load<uint16_t, uint_xlen_t>'), # LHU
     (64, 0x6003, 0x707F, 'load<uint32_t, uint_xlen_t>'), # LWU
 
-    #(32, 0x0007, 0x707F, 'vle8'),
-    #(32, 0x1007, 0x707F, 'flh'),
-    #(32, 0x2007, 0x707F, 'flw'),
-    #(32, 0x3007, 0x707F, 'fld'),
-    #(32, 0x4007, 0x707F, 'flq'),
-    #(32, 0x5007, 0x707F, 'vle16'),
-    #(32, 0x6007, 0x707F, 'vle32'),
-    #(32, 0x7007, 0x707F, 'vle64'),
+    (32, 0x0007, 0x707F, 'v_load<uint8_t>'),
+    (32, 0x1007, 0x707F, 'f_load<uint16_t>'),
+    (32, 0x2007, 0x707F, 'f_load<uint32_t>'),
+    (32, 0x3007, 0x707F, 'f_load<uint64_t>'),
+    (32, 0x4007, 0x707F, 'f_load<unsigned __int128>'),
+    (32, 0x5007, 0x707F, 'v_load<uint16_t>'),
+    (32, 0x6007, 0x707F, 'v_load<uint32_t>'),
+    (32, 0x7007, 0x707F, 'v_load<uint64_t>'),
 
     (64, 0x000B, 0x007F, 'custom_0'),
 
@@ -45,14 +46,14 @@ riscv_decode_table = [
     (32, 0x2023, 0x707F, 'store<uint32_t>'), # SW
     (64, 0x3023, 0x707F, 'store<uint64_t>'), # SD
 
-    #(32, 0x0027, 0x707F, 'vse8'),
-    #(32, 0x1027, 0x707F, 'fsh'),
-    #(32, 0x2027, 0x707F, 'fsw'),
-    #(32, 0x3027, 0x707F, 'fsd'),
-    #(32, 0x4027, 0x707F, 'fsq'),
-    #(32, 0x5027, 0x707F, 'vse16'),
-    #(32, 0x6027, 0x707F, 'vse32'),
-    #(32, 0x7027, 0x707F, 'vse64'),
+    (32, 0x0027, 0x707F, 'v_store<uint8_t>'),
+    (32, 0x1027, 0x707F, 'f_store<uint16_t>'),
+    (32, 0x2027, 0x707F, 'f_store<uint32_t>'),
+    (32, 0x3027, 0x707F, 'f_store<uint64_t>'),
+    (32, 0x4027, 0x707F, 'f_store<unsigned __int128>'),
+    (32, 0x5027, 0x707F, 'v_store<uint16_t>'),
+    (32, 0x6027, 0x707F, 'v_store<uint32_t>'),
+    (32, 0x7027, 0x707F, 'v_store<uint64_t>'),
 
     (64, 0x002B, 0x007F, 'custom_1'),
 
@@ -78,12 +79,12 @@ riscv_decode_table = [
     (64, 0x603B, 0x707F, 'alu_32<6>'),
     (64, 0x703B, 0x707F, 'alu_32<7>'),
 
-    #(32, 0x0043, 0x007F, 'fmadd'),
-    #(32, 0x0047, 0x007F, 'fmsub'),
-    #(32, 0x004B, 0x007F, 'fnmsub'),
-    #(32, 0x004F, 0x007F, 'fnmadd'),
-    #(32, 0x0053, 0x007F, 'falu'),
-    #(32, 0x0057, 0x007F, 'valu'),
+    (32, 0x0043, 0x007F, 'f_fma<false, false>'), # FMADD
+    (32, 0x0047, 0x007F, 'f_fma<false, true>'), # FMSUB
+    (32, 0x004B, 0x007F, 'f_fma<true, false>'), # FNMSUB
+    (32, 0x004F, 0x007F, 'f_fma<true, true>'), # FNMADD
+    (32, 0x0053, 0x007F, 'f_alu'),
+    (32, 0x0057, 0x007F, 'v_alu'),
 
     (64, 0x005B, 0x007F, 'custom_2'),
 

@@ -69,5 +69,5 @@ def main() -> None:
         print(f'\n{n_errors} errors found')
         exit(1)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

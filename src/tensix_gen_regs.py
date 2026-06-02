@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+# Generates _out/{chip}/tensix_regs.h from data/{chip}/tensix_regs.json.
 import argparse
 import json
 

@@ -157,10 +157,63 @@
           "name": "status"
         },
         {
+          "offset": "0x18",
+          "rw": null,
+          "reset_value": null,
+          "name": "packed_size",
+          "unsupported": true
+        },
+        {
+          "offset": "0x1C",
+          "rw": null,
+          "reset_value": null,
+          "name": "acc_packed_size",
+          "unsupported": true
+        },
+        {
           "offset": "0x24",
           "rw": "wo",
           "reset_value": null,
           "name": "clk_gate_en"
+        },
+        {
+          "offset": "0x28",
+          "rw": null,
+          "reset_value": null,
+          "name": "clk_gate_hyst",
+          "unsupported": true
+        },
+        {
+          "offset": "0x2C",
+          "rw": null,
+          "reset_value": null,
+          "name": "xmov_l1_base_addr",
+          "unsupported": true
+        },
+        {
+          "offset": "0x30",
+          "rw": null,
+          "reset_value": null,
+          "name": "fifo_packed_tile_size",
+          "array_size": 4,
+          "array_stride": "0x100",
+          "unsupported": true
+        },
+        {
+          "offset": "0x34",
+          "rw": null,
+          "reset_value": null,
+          "name": "fifo_packed_tile_zeromask",
+          "array_size": 4,
+          "array_stride": "0x100",
+          "unsupported": true
+        },
+        {
+          "offset": "0x38",
+          "rw": null,
+          "reset_value": null,
+          "name": "fifo_packed_tile_status",
+          "unsupported": true
         }
       ]
     },

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// Per-tile infrastructure: tile init, NOC routing, TDMA, Ethernet, DRAM, debug/config registers.
 #include "sim.h"
 
 #if TT_ARCH_VERSION == 0
@@ -291,6 +292,7 @@ static uint32_t riscv_tdma_regs_rd32(uint32_t tile_id, uint32_t offset) {
 #if TT_ARCH_VERSION == 0
         case RISCV_TDMA_REGS_STATUS: return RISCV_TDMA_REGS_STATUS_RESET_VALUE;
 #endif
+        RISCV_TDMA_REGS_RD_DEFAULT_CASES()
         default: TTSIM_ERROR(UnsupportedFunctionality, "offset=0x%x", offset);
     }
 }
@@ -318,6 +320,7 @@ static void riscv_tdma_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t dat
         }
 #endif
         case RISCV_TDMA_REGS_CLK_GATE_EN: break;
+        RISCV_TDMA_REGS_WR_DEFAULT_CASES()
         default: TTSIM_ERROR(UnsupportedFunctionality, "offset=0x%x", offset);
     }
 }
@@ -354,6 +357,7 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
             }
             TTSIM_ERROR(UnsupportedFunctionality, "TRISC_RESET_PC_OVERRIDE in eth tile");
 #endif
+        RISCV_DEBUG_REGS_RD_DEFAULT_CASES()
         default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
     }
 }
@@ -432,6 +436,7 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
         case RISCV_DEBUG_REGS_NCRISC_RESET_PC_OVERRIDE: p_tile->ncrisc_reset_pc_override = data; break;
         case RISCV_DEBUG_REGS_DEST_CG_CTRL: break;
 #endif
+        RISCV_DEBUG_REGS_WR_DEFAULT_CASES()
         default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
     }
 }
@@ -988,6 +993,7 @@ static void noc_regs_wr32(uint32_t tile_id, uint32_t noc_instance, uint32_t offs
             break;
         case NOC_REGS_NOC_CLEAR_OUTSTANDING_REQ_CNT:
             // Only support clearing all the transaction ids
+            TTSIM_VERIFY(data, UnsupportedFunctionality, "no-op mask: noc_clear_outstanding_req_cnt=0x%x", data);
             TTSIM_VERIFY(data == ((1 << NUM_NOC_TRANSACTION_IDS) - 1), UnimplementedFunctionality, "noc_clear_outstanding_req_cnt=0x%x", data);
             for (uint32_t i = 0; i < NUM_NOC_TRANSACTION_IDS; i++) {
                 p_tile->niu_mst_reqs_outstanding[noc_instance][i] = 0;

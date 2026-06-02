@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// Central simulator header: shared types, global state, and the TTSimErrorCategory contract.
 #pragma once
 #include <stddef.h>
 #include <stdio.h>
@@ -115,8 +116,6 @@ struct Rv64HartState {
     uint32_t riscv_id;
     uint64_t pc;
     uint64_t x_regs[32];
-    uint32_t f_regs[32];
-    uint32_t fcsr;
 
     uint64_t mstatus;
     uint64_t mie;
@@ -136,11 +135,20 @@ struct Rv64HartState {
 #define ADC_Y_MASK 0x1FFF // 13 bits
 #define ADC_Z_MASK 0xFF // 8 bits
 #define ADC_W_MASK 0xFF // 8 bits
+#if TT_ARCH_VERSION == 1
+#define TENSIX_CFG_STATE_SIZE 56
+#define TENSIX_THD_STATE_SIZE 68
+#else
+#define TENSIX_CFG_STATE_SIZE 47
+#define TENSIX_THD_STATE_SIZE 57
+#endif
 
 struct TensixThreadState {
     THREAD_CFG0_REG_UNION()
     THREAD_CFG1_REG_UNION()
 #if TT_ARCH_VERSION == 1
+    THREAD_CFG2_REG_UNION()
+    THREAD_CFG3_REG_UNION()
     THREAD_CFG5_REG_UNION()
     THREAD_CFG7_REG_UNION()
     THREAD_CFG11_REG_UNION()
