@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Repo-wide style checker for tracked source files (line length, whitespace, ASCII, etc.).
+import argparse
 import os
 
 # Only files that come from external teams/orgs should go in this list
@@ -54,6 +55,11 @@ def check_file(path: str) -> None:
             report_error(path, line_num, 'extra blank line at end of file')
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description='Check style of all tracked files (ASCII only, no trailing whitespace, no extra '
+                    'blank lines, no tabs, 170-char max). Run from the repo root; takes no arguments.')
+    parser.parse_args()
+
     for (root, dirs, files) in os.walk('.'):
         for name in ['.git', '.vscode', '_out', '__pycache__']:
             if name in dirs:
