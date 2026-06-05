@@ -99,7 +99,6 @@ struct Rv32HartState {
     uint32_t x_regs[32];
 #if TT_ARCH_VERSION >= 1
     uint32_t f_regs[32];
-    uint32_t fcsr;
     uint32_t chicken_bits;
 #endif
 
@@ -545,12 +544,25 @@ struct EthTile {
 #endif
 };
 
+#define ARC_CSM_SIZE (ARC_XBAR_CSM_LIMIT - ARC_XBAR_CSM_BASE + 1)
+
+struct ArcTile {
+#if TT_ARCH_VERSION == 0
+    uint8_t csm[ARC_CSM_SIZE];
+    uint32_t reset_unit_scratch[8];
+    uint32_t arc_misc_cntl;
+
+    uint32_t niu_cfg_0[NUM_NOCS];
+#endif
+};
+
 struct DramChannel {
     uint8_t *p_mem;
 };
 
 extern TensixTile g_t_tiles[NUM_T_TILES];
 extern EthTile g_e_tiles[NUM_E_TILES];
+extern ArcTile g_a_tile;
 extern DramChannel g_dram[NUM_DRAM_CHANNELS];
 extern uint64_t g_clock;
 extern uint64_t g_rv32_cores_active;
@@ -583,6 +595,7 @@ bool tensix_decode_and_execute(TensixState *p_tensix, uint32_t pipe, uint32_t in
 
 void t_tile_init(uint32_t tile_id);
 void e_tile_init(uint32_t tile_id);
+void a_tile_init();
 uint32_t remap_virtual_coordinate(uint32_t noc_instance, uint32_t coord);
 // XXX probably turn these into template functions so we can do 8-bit/16-bit MMIOs as well
 std::pair<bool, uint32_t> tile_mmio_rd32(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_t addr);

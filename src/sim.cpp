@@ -10,6 +10,7 @@
 
 TensixTile g_t_tiles[NUM_T_TILES];
 EthTile g_e_tiles[NUM_E_TILES];
+ArcTile g_a_tile;
 DramChannel g_dram[NUM_DRAM_CHANNELS];
 uint64_t g_clock;
 uint64_t g_rv32_cores_active;
@@ -55,6 +56,7 @@ void ttsim_init() {
     for (uint32_t tile_id = 0; tile_id < std::size(g_e_tiles); tile_id++) {
         e_tile_init(tile_id);
     }
+    a_tile_init();
     for (uint32_t i = 0; i < std::size(g_dram); i++) {
         // Note that MAP_PRIVATE is required if we ever fork(), or else child processes will share DRAM with parent
         g_dram[i].p_mem = (uint8_t *)mmap(nullptr, DRAM_CHANNEL_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

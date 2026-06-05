@@ -451,7 +451,7 @@ extern "C" API_EXPORT void libttsim_clock(uint32_t n_clocks) {
                     uint32_t rv32_index = __builtin_ctz(rv32_mask);
                     rv32_step(&p_tile->rv32[rv32_index]);
                 }
-                bool any_tensix = false;
+                [[maybe_unused]] bool any_tensix = false;
                 for (uint32_t tensix_id = 0; tensix_id < std::size(p_tile->tensix); tensix_id++) {
                     TensixState *p_tensix = &p_tile->tensix[tensix_id];
                     for (uint32_t pipe_mask = p_tensix->inst_pipes_active; pipe_mask; pipe_mask &= pipe_mask-1) {

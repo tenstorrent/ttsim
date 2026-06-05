@@ -290,7 +290,28 @@ template<bool neg_product, bool neg_addend> static void RV_XLEN_PREFIX(f_fma)(Ri
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zfh/F/D/Q");
 #else
-    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+    uint32_t fmt = bits<26,25>(inst);
+    TTSIM_VERIFY(fmt != 1, UndefinedBehavior, "babyrisc does not support D");
+    TTSIM_VERIFY(fmt != 3, UndefinedBehavior, "babyrisc does not support Q");
+    TTSIM_VERIFY(fmt != 2, UnsupportedFunctionality, "babyrisc non-compliant Zfh extension is out of scope");
+    uint32_t r_dst = bits<11,7>(inst);
+    uint32_t rm = bits<14,12>(inst);
+    TTSIM_VERIFY(rm == 7, UnsupportedFunctionality, "rm=%d", rm);
+    uint32_t r_src0 = bits<19,15>(inst);
+    uint32_t r_src1 = bits<24,20>(inst);
+    uint32_t r_src2 = bits<31,27>(inst);
+
+    TTSIM_ERROR_NOFMT(UntestedFunctionality);
+    uint32_t a = p_hart->f_regs[r_src0];
+    uint32_t b = p_hart->f_regs[r_src1];
+    uint32_t c = p_hart->f_regs[r_src2];
+    if (neg_product) {
+        a ^= 0x80000000;
+    }
+    if (neg_addend) {
+        c ^= 0x80000000;
+    }
+    p_hart->f_regs[r_dst] = fma_model(a, b, c); // note: uses same non-IEEE FMA as SFPU
 #endif
 }
 
@@ -298,7 +319,52 @@ static void RV_XLEN_PREFIX(f_alu)(RiscvHartState *p_hart, uint32_t inst) {
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zfh/F/D/Q");
 #else
-    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+    uint32_t funct7 = bits<31,25>(inst);
+    uint32_t funct3 = bits<14,12>(inst);
+    uint32_t fmt = funct7 & 3;
+    TTSIM_VERIFY(fmt != 1, UndefinedBehavior, "babyrisc does not support D");
+    TTSIM_VERIFY(fmt != 3, UndefinedBehavior, "babyrisc does not support Q");
+    TTSIM_VERIFY(fmt != 2, UnsupportedFunctionality, "babyrisc non-compliant Zfh extension is out of scope");
+    //uint32_t r_dst = bits<11,7>(inst);
+    //uint32_t r_src0 = bits<19,15>(inst);
+    //uint32_t r_src1 = bits<24,20>(inst);
+
+    switch (funct7) {
+        case 0x00: TTSIM_ERROR(UnimplementedFunctionality, "FADD.S");
+        case 0x04: TTSIM_ERROR(UnimplementedFunctionality, "FSUB.S");
+        case 0x08: TTSIM_ERROR(UnimplementedFunctionality, "FMUL.S");
+        case 0x0C: TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support FDIV");
+        case 0x10:
+            switch (funct3) {
+                case 0: TTSIM_ERROR(UnimplementedFunctionality, "FSGNJ.S");
+                case 1: TTSIM_ERROR(UnimplementedFunctionality, "FSGNJN.S");
+                case 2: TTSIM_ERROR(UnimplementedFunctionality, "FSGNJX.S");
+                default: TTSIM_ERROR(UndefinedBehavior, "FSGNJ funct3=%d", funct3);
+            }
+            break;
+        case 0x14:
+            switch (funct3) {
+                case 0: TTSIM_ERROR(UnimplementedFunctionality, "FMIN.S");
+                case 1: TTSIM_ERROR(UnimplementedFunctionality, "FMAX.S");
+                default: TTSIM_ERROR(UndefinedBehavior, "FMINMAX funct3=%d", funct3);
+            }
+            break;
+        case 0x2C: TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support FSQRT");
+        case 0x50:
+            switch (funct3) {
+                case 0: TTSIM_ERROR(UnimplementedFunctionality, "FLE.S");
+                case 1: TTSIM_ERROR(UnimplementedFunctionality, "FLT.S");
+                case 2: TTSIM_ERROR(UnimplementedFunctionality, "FEQ.S");
+                default: TTSIM_ERROR(UndefinedBehavior, "FCMP funct3=%d", funct3);
+            }
+            break;
+        case 0x60: TTSIM_ERROR(UnimplementedFunctionality, "FCVT.W");
+        case 0x68: TTSIM_ERROR(UnimplementedFunctionality, "FCVT.S");
+        case 0x70: TTSIM_ERROR(UnimplementedFunctionality, "FMV.X.W/FCLASS.S");
+        case 0x78: TTSIM_ERROR(UnimplementedFunctionality, "FMV.W.X");
+        default:
+            TTSIM_ERROR(UndefinedBehavior, "funct7=0x%x funct3=%d", funct7, funct3);
+    }
 #endif
 }
 
@@ -455,12 +521,27 @@ template<class T> static void RV_XLEN_PREFIX(f_load)(RiscvHartState *p_hart, uin
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zfh/F/D/Q");
 #else
-    if constexpr (sizeof(T) == 8) {
+    if constexpr (sizeof(T) == 2) {
+        TTSIM_ERROR(UnsupportedFunctionality, "babyrisc non-compliant Zfh extension is out of scope");
+    } else if constexpr (sizeof(T) == 4) {
+        uint32_t r_base = bits<19,15>(inst);
+        uint32_t r_dst = bits<11,7>(inst);
+        int_xlen_t imm = RISCV_I_IMM(inst);
+
+        TTSIM_ERROR_NOFMT(UntestedFunctionality);
+        uint_xlen_t addr = p_hart->x_regs[r_base] + imm;
+        uint32_t value;
+        if (!RV_XLEN_PREFIX(mem_rd)<uint32_t>(p_hart, addr, &value)) [[unlikely]] {
+            p_hart->pc -= 4; // replay load to handle stall
+            return;
+        }
+        p_hart->f_regs[r_dst] = value;
+    } else if constexpr (sizeof(T) == 8) {
         TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support D");
-    } else if constexpr (sizeof(T) == 16) {
+    } else {
+        static_assert(sizeof(T) == 16);
         TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support Q");
     }
-    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
 #endif
 }
 
@@ -468,12 +549,25 @@ template<class T> static void RV_XLEN_PREFIX(f_store)(RiscvHartState *p_hart, ui
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zfh/F/D/Q");
 #else
-    if constexpr (sizeof(T) == 8) {
+    if constexpr (sizeof(T) == 2) {
+        TTSIM_ERROR(UnsupportedFunctionality, "babyrisc non-compliant Zfh extension is out of scope");
+    } else if constexpr (sizeof(T) == 4) {
+        uint32_t r_base = bits<19,15>(inst);
+        uint32_t r_src = bits<24,20>(inst);
+        int_xlen_t imm = RISCV_S_IMM(inst);
+
+        TTSIM_ERROR_NOFMT(UntestedFunctionality);
+        uint_xlen_t addr = p_hart->x_regs[r_base] + imm;
+        uint32_t value = p_hart->f_regs[r_src];
+        if (!RV_XLEN_PREFIX(mem_wr)<uint32_t>(p_hart, addr, value)) [[unlikely]] {
+            p_hart->pc -= 4; // replay store to handle stall
+        }
+    } else if constexpr (sizeof(T) == 8) {
         TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support D");
-    } else if constexpr (sizeof(T) == 16) {
+    } else {
+        static_assert(sizeof(T) == 16);
         TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support Q");
     }
-    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
 #endif
 }
 
