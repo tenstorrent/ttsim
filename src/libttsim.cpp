@@ -46,6 +46,9 @@
 #define IATU_REGION_ENABLE 0x80000000u
 #define IATU_SUPPORTED_INBOUND_CTRL_2 0xC8000400u
 #define IATU_SUPPORTED_INBOUND_TARGET 0x1E000000ull
+#define IATU_OUTBOUND_WINDOW_LIMIT 0xFFFDFFFFu
+
+#define DMA_BUFFER_SIZE (4u * 1024)
 #endif
 
 static bool s_ttsim_running = false;
@@ -59,7 +62,28 @@ static void verify_iatu_region_write(uint32_t offset, uint32_t value) {
     TTSIM_VERIFY(slot < 32, UnimplementedFunctionality, "bar2: iATU offset=0x%x", offset);
     bool inbound = slot & 1;
     uint32_t region = slot >> 1;
-    TTSIM_VERIFY(inbound, UnimplementedFunctionality, "bar2: outbound iATU region=%d", region);
+    if (!inbound) {
+        const IatuRegion &r = g_p_tile.iatu_outbound[region];
+        if (r.ctrl_2 & IATU_REGION_ENABLE) {
+            TTSIM_VERIFY(r.upper_base == 0, UndefinedBehavior,
+                "bar2: outbound iATU region=%d base above window: upper_base=0x%x", region, r.upper_base);
+            TTSIM_VERIFY(r.lower_base <= r.limit, UndefinedBehavior,
+                "bar2: outbound iATU region=%d base=0x%x > limit=0x%x", region, r.lower_base, r.limit);
+            TTSIM_VERIFY(r.limit <= IATU_OUTBOUND_WINDOW_LIMIT, UndefinedBehavior,
+                "bar2: outbound iATU region=%d limit=0x%x outside window", region, r.limit);
+            for (uint32_t j = 0; j < 16; j++) {
+                if (j == region || !(g_p_tile.iatu_outbound[j].ctrl_2 & IATU_REGION_ENABLE)) {
+                    continue;
+                }
+                const IatuRegion &o = g_p_tile.iatu_outbound[j];
+                TTSIM_VERIFY(r.lower_base > o.limit || o.lower_base > r.limit, UndefinedBehavior,
+                    "bar2: outbound iATU region=%d [0x%x,0x%x] overlaps region=%d [0x%x,0x%x]",
+                    region, r.lower_base, r.limit, j, o.lower_base, o.limit);
+            }
+        }
+        return;
+    }
+    // verify that configuration aligns with simulator's hard-coded inbound iatu
     TTSIM_VERIFY(region == 1, UnimplementedFunctionality, "bar2: inbound iATU region=%d", region);
     uint32_t reg = offset % 0x100;
     switch (reg) {
@@ -245,10 +269,128 @@ static std::pair<uint32_t, uint64_t> tlb_translate_bar4(uint64_t offset, uint32_
 }
 #endif
 
+static void tlb_window_write(uint32_t offset, const void *p, uint32_t size) {
+    auto target = tlb_translate(offset, size);
+    if (target.mcast) {
+        uint32_t start_x = target.coord_start & 63, end_x = target.coord & 63;
+        uint32_t start_y = target.coord_start >> 6, end_y = target.coord >> 6;
+        TTSIM_VERIFY((start_x <= end_x) && (start_y <= end_y), UndefinedBehavior,
+            "multicast start (%d,%d) past end (%d,%d)", start_x, start_y, end_x, end_y);
+        TTSIM_VERIFY(!((1ull << start_x & NONTENSIX_COL_MASK) || (1ull << start_y & NONTENSIX_ROW_MASK) ||
+                    (1ull << end_x & NONTENSIX_COL_MASK) || (1ull << end_y & NONTENSIX_ROW_MASK)),
+                    UndefinedBehavior, "multicast rectangle not within Tensix grid");
+        for (uint32_t y = start_y; y <= end_y; y++) {
+            for (uint32_t x = start_x; x <= end_x; x++) {
+                if ((1ull << x & NONTENSIX_COL_MASK) || (1ull << y & NONTENSIX_ROW_MASK)) {
+                    continue;
+                }
+                uint32_t coord = x | (y << 6);
+                tile_wr_bytes(coord, target.addr, p, size);
+            }
+        }
+    } else {
+#if NUM_CHIPS > 1
+        if (!wh_x2_legacy_remote_queue_host_wr(target.coord, target.addr, p, size)) {
+            tile_wr_bytes(target.coord, target.addr, p, size);
+        }
+#else
+        tile_wr_bytes(target.coord, target.addr, p, size);
+#endif
+    }
+}
+
+static void tlb_window_read(uint32_t offset, void *p, uint32_t size) {
+    auto target = tlb_translate(offset, size);
+    TTSIM_VERIFY(!target.mcast, UndefinedBehavior, "multicast read");
+#if NUM_CHIPS > 1
+    if (!wh_x2_legacy_remote_queue_host_rd(target.coord, target.addr, p, size)) {
+        tile_rd_bytes(target.coord, target.addr, p, size);
+    }
+#else
+    tile_rd_bytes(target.coord, target.addr, p, size);
+#endif
+}
+
+#if TT_ARCH_VERSION == 0
+static uint32_t *dma_reg_ptr(uint32_t offset) {
+    switch (offset) {
+        case 0x208: return &g_p_tile.dma.write_transfer_size;
+        case 0x20c: return &g_p_tile.dma.write_sar_low;
+        case 0x214: return &g_p_tile.dma.write_dar_low;
+        case 0x218: return &g_p_tile.dma.write_dar_high;
+        case 0x060: return &g_p_tile.dma.write_done_imwr_low;
+        case 0x064: return &g_p_tile.dma.write_done_imwr_high;
+        case 0x070: return &g_p_tile.dma.write_imwr_data;
+        case 0x308: return &g_p_tile.dma.read_transfer_size;
+        case 0x30c: return &g_p_tile.dma.read_sar_low;
+        case 0x310: return &g_p_tile.dma.read_sar_high;
+        case 0x314: return &g_p_tile.dma.read_dar_low;
+        case 0x0cc: return &g_p_tile.dma.read_done_imwr_low;
+        case 0x0d0: return &g_p_tile.dma.read_done_imwr_high;
+        case 0x0dc: return &g_p_tile.dma.read_imwr_data;
+        case 0x00c: return &g_p_tile.dma.write_engine_en;
+        case 0x010: return &g_p_tile.dma.write_doorbell;
+        case 0x054: return &g_p_tile.dma.write_int_mask;
+        case 0x068: return &g_p_tile.dma.write_abort_imwr_low;
+        case 0x06c: return &g_p_tile.dma.write_abort_imwr_high;
+        case 0x200: return &g_p_tile.dma.write_control1;
+        case 0x210: return &g_p_tile.dma.write_sar_high;
+        case 0x02c: return &g_p_tile.dma.read_engine_en;
+        case 0x030: return &g_p_tile.dma.read_doorbell;
+        case 0x0a8: return &g_p_tile.dma.read_int_mask;
+        case 0x0d4: return &g_p_tile.dma.read_abort_imwr_low;
+        case 0x0d8: return &g_p_tile.dma.read_abort_imwr_high;
+        case 0x300: return &g_p_tile.dma.read_control1;
+        case 0x318: return &g_p_tile.dma.read_dar_high;
+        default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
+    }
+}
+
+static void dma_read_engine() { // H2D
+    uint32_t size = g_p_tile.dma.read_transfer_size;
+    TTSIM_VERIFY(size && !(size & 3), UndefinedBehavior, "size=%d", size);
+    TTSIM_VERIFY(!(g_p_tile.dma.read_dar_low & 3), UndefinedBehavior, "misaligned device address=0x%x", g_p_tile.dma.read_dar_low);
+    TTSIM_VERIFY(!g_p_tile.dma.read_dar_high, UnimplementedFunctionality, "64-bit device address: dar_high=0x%x", g_p_tile.dma.read_dar_high);
+    uint64_t host_src = uint64_t(g_p_tile.dma.read_sar_low) | (uint64_t(g_p_tile.dma.read_sar_high) << 32);
+    uint32_t dev_dst = g_p_tile.dma.read_dar_low;
+    uint8_t dma_buffer[DMA_BUFFER_SIZE];
+    for (uint32_t off = 0; off < size;) {
+        uint32_t chunk = (size - off < DMA_BUFFER_SIZE) ? size - off : DMA_BUFFER_SIZE;
+        libttsim_pci_dma_mem_rd_bytes(host_src + off, dma_buffer, chunk);
+        tlb_window_write(dev_dst + off, dma_buffer, chunk);
+        off += chunk;
+    }
+    // signal completion
+    uint64_t rd_done_addr = uint64_t(g_p_tile.dma.read_done_imwr_low) | (uint64_t(g_p_tile.dma.read_done_imwr_high) << 32);
+    libttsim_pci_dma_mem_wr_bytes(rd_done_addr, &g_p_tile.dma.read_imwr_data, 4);
+}
+
+static void dma_write_engine() { // D2H
+    uint32_t size = g_p_tile.dma.write_transfer_size;
+    TTSIM_VERIFY(size && !(size & 3), UndefinedBehavior, "size=%d", size);
+    TTSIM_VERIFY(!(g_p_tile.dma.write_sar_low & 3), UndefinedBehavior, "misaligned device address=0x%x", g_p_tile.dma.write_sar_low);
+    TTSIM_VERIFY(!g_p_tile.dma.write_sar_high, UnimplementedFunctionality, "64-bit device address: sar_high=0x%x", g_p_tile.dma.write_sar_high);
+    uint64_t host_dst = uint64_t(g_p_tile.dma.write_dar_low) | (uint64_t(g_p_tile.dma.write_dar_high) << 32);
+    uint32_t dev_src = g_p_tile.dma.write_sar_low;
+    uint8_t dma_buffer[DMA_BUFFER_SIZE];
+    for (uint32_t off = 0; off < size;) {
+        uint32_t chunk = (size - off < DMA_BUFFER_SIZE) ? size - off : DMA_BUFFER_SIZE;
+        tlb_window_read(dev_src + off, dma_buffer, chunk);
+        libttsim_pci_dma_mem_wr_bytes(host_dst + off, dma_buffer, chunk);
+        off += chunk;
+    }
+    // signal completion
+    uint64_t wr_done_addr = uint64_t(g_p_tile.dma.write_done_imwr_low) | (uint64_t(g_p_tile.dma.write_done_imwr_high) << 32);
+    libttsim_pci_dma_mem_wr_bytes(wr_done_addr, &g_p_tile.dma.write_imwr_data, 4);
+}
+#endif
+
 // Worker for the currently-selected chip. The device-routing wrapper below selects the
 // chip from the host physical address; intra-chip recursion (BAR4->SOC) calls this
 // directly so it stays on that chip.
 static void pci_mem_rd_cur(uint64_t paddr, void *p, uint32_t size) {
+    TTSIM_VERIFY(s_ttsim_running, ConfigurationError, "sim is not running");
+    TTSIM_VERIFY(size, UndefinedBehavior, "size=%d", size);
     switch (paddr) {
         case BAR0_BASE ... BAR0_BASE + BAR0_SIZE - 1: {
             uint32_t offset = paddr - BAR0_BASE;
@@ -260,15 +402,7 @@ static void pci_mem_rd_cur(uint64_t paddr, void *p, uint32_t size) {
                 case 0x00000000 ... 0x193FFFFF:
 #endif
                 {
-                    auto target = tlb_translate(offset, size);
-                    TTSIM_VERIFY(!target.mcast, UndefinedBehavior, "multicast read");
-#if NUM_CHIPS > 1
-                    if (!wh_x2_legacy_remote_queue_host_rd(target.coord, target.addr, p, size)) {
-                        tile_rd_bytes(target.coord, target.addr, p, size);
-                    }
-#else
-                    tile_rd_bytes(target.coord, target.addr, p, size);
-#endif
+                    tlb_window_read(offset, p, size);
                     break;
                 }
 #if TT_ARCH_VERSION == 0
@@ -294,6 +428,10 @@ static void pci_mem_rd_cur(uint64_t paddr, void *p, uint32_t size) {
             TTSIM_VERIFY(!(paddr & 3), UnsupportedFunctionality, "bar2: misaligned paddr=0x%llx", paddr);
             uint32_t offset = paddr - BAR2_BASE;
             switch (offset) {
+                case 0x0 ... IATU_BASE - 1: {
+                    mem_wr<uint32_t>(p, *dma_reg_ptr(offset));
+                    break;
+                }
                 case IATU_BASE ... IATU_LIMIT:
                     mem_wr<uint32_t>(p, *iatu_reg_field(offset - IATU_BASE));
                     break;
@@ -376,34 +514,7 @@ static void pci_mem_wr_cur(uint64_t paddr, const void *p, uint32_t size) {
                 case 0x00000000 ... 0x193FFFFF:
 #endif
                 {
-                    auto target = tlb_translate(offset, size);
-
-                    if (target.mcast) {
-                        uint32_t start_x = target.coord_start & 63, end_x = target.coord & 63;
-                        uint32_t start_y = target.coord_start >> 6, end_y = target.coord >> 6;
-                        TTSIM_VERIFY((start_x <= end_x) && (start_y <= end_y), UndefinedBehavior,
-                            "multicast start (%d,%d) past end (%d,%d)", start_x, start_y, end_x, end_y);
-                        TTSIM_VERIFY(!((1ull << start_x & NONTENSIX_COL_MASK) || (1ull << start_y & NONTENSIX_ROW_MASK) ||
-                                    (1ull << end_x & NONTENSIX_COL_MASK) || (1ull << end_y & NONTENSIX_ROW_MASK)),
-                                    UndefinedBehavior, "multicast rectangle not within Tensix grid");
-                        for (uint32_t y = start_y; y <= end_y; y++) {
-                            for (uint32_t x = start_x; x <= end_x; x++) {
-                                if ((1ull << x & NONTENSIX_COL_MASK) || (1ull << y & NONTENSIX_ROW_MASK)) {
-                                    continue;
-                                }
-                                uint32_t coord = x | (y << 6);
-                                tile_wr_bytes(coord, target.addr, p, size);
-                            }
-                        }
-                    } else {
-#if NUM_CHIPS > 1
-                        if (!wh_x2_legacy_remote_queue_host_wr(target.coord, target.addr, p, size)) {
-                            tile_wr_bytes(target.coord, target.addr, p, size);
-                        }
-#else
-                        tile_wr_bytes(target.coord, target.addr, p, size);
-#endif
-                    }
+                    tlb_window_write(offset, p, size);
                     break;
                 }
 #if TT_ARCH_VERSION == 0
@@ -447,11 +558,25 @@ static void pci_mem_wr_cur(uint64_t paddr, const void *p, uint32_t size) {
             TTSIM_VERIFY(!(paddr & 3), UnsupportedFunctionality, "bar2: misaligned paddr=0x%llx", paddr);
             uint32_t offset = paddr - BAR2_BASE;
             switch (offset) {
+                case 0x0 ... IATU_BASE - 1: {
+                    uint32_t value = mem_rd<uint32_t>(p);
+                    *dma_reg_ptr(offset) = value;
+                    if ((offset == 0x10) || (offset == 0x30)) {
+                        // The doorbell value selects the DMA channel; only channel 0 is modeled.
+                        TTSIM_VERIFY(!value, UnimplementedFunctionality, "bar2: DMA doorbell channel=%u", value);
+                        if (offset == 0x10) { // DMA_WRITE_DOORBELL: device -> host
+                            dma_write_engine();
+                        } else { // DMA_READ_DOORBELL: host -> device
+                            dma_read_engine();
+                        }
+                    }
+                    break;
+                }
                 case IATU_BASE ... IATU_LIMIT: {
                     uint32_t iatu_offset = offset - IATU_BASE;
                     uint32_t value = mem_rd<uint32_t>(p);
-                    verify_iatu_region_write(iatu_offset, value);
                     *iatu_reg_field(iatu_offset) = value;
+                    verify_iatu_region_write(iatu_offset, value);
                     break;
                 }
                 default:
@@ -496,14 +621,33 @@ extern "C" API_EXPORT void libttsim_pci_mem_wr_bytes(uint64_t paddr, const void 
 #endif
 }
 
-// XXX This currently assumes that the host system/IOMMU does not need to know which MMIO chip is originating the DMA
+// Sysmem (host DRAM) the chip DMAs from/to, via the chip's outbound iATU. This is the chip side of
+// the PCIe bus: each chip's outbound iATU maps its fixed NOC sysmem window (WH: 0x8_0000_0000, a few
+// GB) onto *that chip's own* host hugepage -- exactly what UMD does on real HW, programming one iATU
+// region per device with that device's hugepage address (LocalChip::init_pcie_iatus ->
+// configure_iatu_region(channel, hugepage_map.physical_address)). So in a multi-MMIO (BDF) cluster,
+// chip N's identical NOC window address must resolve to chip N's distinct host sysmem.
+//
+// ttsim models that per-chip mapping here, at the DMA egress, keyed on the originating chip
+// (g_current_chip_id): + N * PER_DEVICE_PADDR_STRIDE. The host callback then routes purely by the
+// resulting address (paddr / stride -> device), identical to the BAR path in libttsim_pci_mem_rd_bytes
+// -- the chip id never crosses the callback (that is the host side of the bus). The per-chip offset
+// belongs on the chip side, not in the address the chip emits: the NOC window is fixed and small, so a
+// per-device *host* pcie_base would push addresses outside that window. The stride is a modeling
+// constant; the within-window offset is always << the stride. No-op for single-chip / device 0.
 void libttsim_pci_dma_mem_rd_bytes(uint64_t paddr, void *p, uint32_t size) {
     TTSIM_VERIFY(s_pfn_libttsim_pci_dma_mem_rd_bytes, ConfigurationError, "DMA read callback not installed");
+#if NUM_CHIPS > 1
+    paddr += uint64_t(g_current_chip_id) * PER_DEVICE_PADDR_STRIDE;
+#endif
     s_pfn_libttsim_pci_dma_mem_rd_bytes(paddr, p, size);
 }
 
 void libttsim_pci_dma_mem_wr_bytes(uint64_t paddr, const void *p, uint32_t size) {
     TTSIM_VERIFY(s_pfn_libttsim_pci_dma_mem_wr_bytes, ConfigurationError, "DMA write callback not installed");
+#if NUM_CHIPS > 1
+    paddr += uint64_t(g_current_chip_id) * PER_DEVICE_PADDR_STRIDE;
+#endif
     s_pfn_libttsim_pci_dma_mem_wr_bytes(paddr, p, size);
 }
 
@@ -554,7 +698,24 @@ static void clock_current_chip() {
         uint32_t core_index = __builtin_ctzll(rv32_mask);
         uint32_t tile_id = core_index / RV32_CORES_PER_E_TILE;
         uint32_t rv32_index = core_index % RV32_CORES_PER_E_TILE;
-        rv32_step(&g_e_tiles[tile_id].rv32[rv32_index]);
+        auto *p_hart = &g_e_tiles[tile_id].rv32[rv32_index];
+#if TT_ARCH_VERSION == 1
+        // The active-erisc app kernel tail-calls kernel_main; on exit (e.g. fabric teardown /
+        // reconfig in the same process) it returns to ra. ttsim's faked base-FW launch leaves ra=0,
+        // so the kernel returns to pc=0 -- the base-FW guard value (see ierisc_reset_pc in tile.cpp).
+        // On silicon the kernel lands back in the persistent base FW and idles until the next
+        // RUN_MSG_GO; emulate that by parking the core (reactivated by the next GO) instead of
+        // executing the 0x0 guard as an illegal instruction. The base FW also flips the go-message
+        // signal to RUN_MSG_DONE (0) so the host (llrt::wait_until_cores_done, polling the GO_MSG
+        // mailbox at L1 0x490) sees the program complete; mimic that by clearing the signal byte.
+        // Rare (once per kernel return); [[unlikely]] keeps it off the hot per-instruction path.
+        if (!p_hart->pc) [[unlikely]] {
+            ttsim_rv32_set_core_active('E', tile_id, rv32_index, false);
+            g_e_tiles[tile_id].sram[0x490 + 3] = 0; // go_messages[0].signal = RUN_MSG_DONE
+            continue;
+        }
+#endif
+        rv32_step(p_hart);
     }
 }
 

@@ -575,6 +575,37 @@ struct IatuRegion {
     uint32_t lower_target;
     uint32_t upper_target;
 };
+
+struct DmaEngine {
+    uint32_t write_engine_en;
+    uint32_t write_doorbell;
+    uint32_t write_int_mask;
+    uint32_t write_done_imwr_low;
+    uint32_t write_done_imwr_high;
+    uint32_t write_abort_imwr_low;
+    uint32_t write_abort_imwr_high;
+    uint32_t write_imwr_data;
+    uint32_t write_control1;
+    uint32_t write_transfer_size;
+    uint32_t write_sar_low;
+    uint32_t write_sar_high;
+    uint32_t write_dar_low;
+    uint32_t write_dar_high;
+    uint32_t read_engine_en;
+    uint32_t read_doorbell;
+    uint32_t read_int_mask;
+    uint32_t read_done_imwr_low;
+    uint32_t read_done_imwr_high;
+    uint32_t read_abort_imwr_low;
+    uint32_t read_abort_imwr_high;
+    uint32_t read_imwr_data;
+    uint32_t read_control1;
+    uint32_t read_transfer_size;
+    uint32_t read_sar_low;
+    uint32_t read_sar_high;
+    uint32_t read_dar_low;
+    uint32_t read_dar_high;
+};
 #endif
 
 struct PcieTile {
@@ -582,6 +613,7 @@ struct PcieTile {
     uint64_t tlb_cfg[186];
     IatuRegion iatu_outbound[16];
     IatuRegion iatu_inbound[16];
+    DmaEngine dma;
 #elif TT_ARCH_VERSION == 1
     uint32_t tlb_cfg[210*3];
 #endif
