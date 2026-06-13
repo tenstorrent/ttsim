@@ -621,33 +621,13 @@ extern "C" API_EXPORT void libttsim_pci_mem_wr_bytes(uint64_t paddr, const void 
 #endif
 }
 
-// Sysmem (host DRAM) the chip DMAs from/to, via the chip's outbound iATU. This is the chip side of
-// the PCIe bus: each chip's outbound iATU maps its fixed NOC sysmem window (WH: 0x8_0000_0000, a few
-// GB) onto *that chip's own* host hugepage -- exactly what UMD does on real HW, programming one iATU
-// region per device with that device's hugepage address (LocalChip::init_pcie_iatus ->
-// configure_iatu_region(channel, hugepage_map.physical_address)). So in a multi-MMIO (BDF) cluster,
-// chip N's identical NOC window address must resolve to chip N's distinct host sysmem.
-//
-// ttsim models that per-chip mapping here, at the DMA egress, keyed on the originating chip
-// (g_current_chip_id): + N * PER_DEVICE_PADDR_STRIDE. The host callback then routes purely by the
-// resulting address (paddr / stride -> device), identical to the BAR path in libttsim_pci_mem_rd_bytes
-// -- the chip id never crosses the callback (that is the host side of the bus). The per-chip offset
-// belongs on the chip side, not in the address the chip emits: the NOC window is fixed and small, so a
-// per-device *host* pcie_base would push addresses outside that window. The stride is a modeling
-// constant; the within-window offset is always << the stride. No-op for single-chip / device 0.
 void libttsim_pci_dma_mem_rd_bytes(uint64_t paddr, void *p, uint32_t size) {
     TTSIM_VERIFY(s_pfn_libttsim_pci_dma_mem_rd_bytes, ConfigurationError, "DMA read callback not installed");
-#if NUM_CHIPS > 1
-    paddr += uint64_t(g_current_chip_id) * PER_DEVICE_PADDR_STRIDE;
-#endif
     s_pfn_libttsim_pci_dma_mem_rd_bytes(paddr, p, size);
 }
 
 void libttsim_pci_dma_mem_wr_bytes(uint64_t paddr, const void *p, uint32_t size) {
     TTSIM_VERIFY(s_pfn_libttsim_pci_dma_mem_wr_bytes, ConfigurationError, "DMA write callback not installed");
-#if NUM_CHIPS > 1
-    paddr += uint64_t(g_current_chip_id) * PER_DEVICE_PADDR_STRIDE;
-#endif
     s_pfn_libttsim_pci_dma_mem_wr_bytes(paddr, p, size);
 }
 

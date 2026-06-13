@@ -721,6 +721,12 @@
           "rw": null,
           "reset_value": null,
           "name": "noc_nodeid_y_0"
+        },
+        {
+          "offset": "0x1D8",
+          "rw": "ro",
+          "reset_value": null,
+          "name": "arc_msg_qcb_ptr"
         }
       ]
     }

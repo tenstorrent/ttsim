@@ -1990,7 +1990,7 @@ TENSIX_EXECUTE_PACR() {
     TTSIM_VERIFY(intermediate_format == pack_src_format, UndefinedBehavior,
         "intermediate_format=%d mismatches late_from_format=%d", intermediate_format, pack_src_format);
     uint32_t pack_fmt_conv_mode = (p_config->PCK_DEST_RD_CTRL_Read_32b_data << 8) | (pack_src_format << 4) | pack_dst_format;
-    TTSIM_VERIFY((pack_fmt_conv_mode == 0x10) || (pack_fmt_conv_mode == 0x11) || // fp16 src, fp32/fp16 dst
+    TTSIM_VERIFY((pack_fmt_conv_mode == 0x10) || (pack_fmt_conv_mode == 0x11) || (pack_fmt_conv_mode == 0x15) || // fp16 src, fp32/fp16/bf16 dst
                  (pack_fmt_conv_mode == 0x50) || (pack_fmt_conv_mode == 0x55) || // bf16 src, fp32/bf16 dst
                  (pack_fmt_conv_mode == 0x56) || (pack_fmt_conv_mode == 0x57) || // bf16 src, bfp8/bfp4 dst
                  (pack_fmt_conv_mode == 0x60) || (pack_fmt_conv_mode == 0x65) || (pack_fmt_conv_mode == 0x66) || // bfp8 src, fp32/bf16/bfp8 dst
@@ -2241,6 +2241,14 @@ TENSIX_EXECUTE_PACR() {
                         value = ((value & 0x8000) << 16) | (((value & 0x7FFF) + (112 << 10)) << 13);
                     } else { // zero exponent: just widen the mantissa (no rebias), producing FP32 zero or denormal
                         value = ((value & 0x8000) << 16) | ((value & 0x3FF) << 13);
+                    }
+                } else if ((intermediate_format == 1) && (pack_dst_format == 5)) { // fp16 -> bf16 late conversion
+                    uint32_t e = (value >> 10) & 0x1F;
+                    uint32_t m = value & 0x3FF;
+                    if (e == 0) {
+                        value = value & 0x8000;
+                    } else {
+                        value = (value & 0x8000) | ((e + 112) << 7) | (m >> 3);
                     }
                 } else if ((intermediate_format == 0) && (pack_dst_format == 1)) { // fp32 -> fp16 late conversion
                     uint32_t s = value >> 31;

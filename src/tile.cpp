@@ -199,7 +199,7 @@ void e_tile_init(uint32_t tile_id) {
         p_tile->router_cfg_3[noc] = NONTENSIX_ROW_MASK;
     }
 #if TT_ARCH_VERSION == 0
-    mem_wr<uint32_t>(&p_tile->sram[0x210], 0x06060000); // FW_VERSION_ADDR
+    mem_wr<uint32_t>(&p_tile->sram[0x210], (6 << 16) | (14 << 12)); // ETH_FW_VERSION_ADDR = 6.14.0
     mem_wr<uint32_t>(&p_tile->sram[0x1104], 3); // ETH_TRAIN_STATUS_ADDR = NOT_CONNECTED
     constexpr uint32_t jmp_addr = 0x440; // This is the address jumped to by the context switch
     mem_wr<uint32_t>(&p_tile->sram[0x9020], jmp_addr); // This is the jump table
@@ -457,6 +457,9 @@ static void wh_x2_eth_link_init(uint32_t tile_id) {
         mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 73], remote_chip_id); // remote ASIC id hi
         mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 76], remote_eth_id); // remote eth id
         mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 77], WH_X2_MANGLED_BOARD_ID); // remote board type
+        mem_wr<uint32_t>(&p_tile->sram[0x1100 + 4 * 2], (g_current_chip_id & 0xFF) << 16); // NODE_INFO local x[23:16] (y[31:24]=0)
+        mem_wr<uint32_t>(&p_tile->sram[0x1100 + 4 * 9], (remote_chip_id & 0x3F) << 16); // NODE_INFO remote x[21:16] (y[27:22]=0)
+        mem_wr<uint32_t>(&p_tile->sram[0x1100 + 4 * 10], 0); // NODE_INFO remote rack[7:0] shelf[15:8] (both 0)
     }
 #endif
 }
@@ -2132,6 +2135,8 @@ static uint32_t arc_reset_unit_rd32(uint32_t offset) {
             return ARC_TELEMETRY_TABLE_CSM_OFFSET;
         case RESET_UNIT_NOC_NODEID_Y_0:
             return ARC_TELEMETRY_VALUES_CSM_OFFSET;
+        case RESET_UNIT_ARC_MSG_QCB_PTR:
+            return 0; // indicates firmware does not support ARC msg queue
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
     }
@@ -2382,7 +2387,17 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
             // launch_msg_rd_ptr @ base+12; launch[] @ base+16 (stride sizeof(kernel_config_msg_t)=112);
             // kernel_config_base[ACTIVE_ETH=1] @ launch+4; rta_offset[DM0=0] @ launch+28 (rta) / +30
             // (crta); kernel_text_offset[DM0=0] @ launch+52.
-            if (addr == 0x490 && size == 4 && (mem_rd<uint32_t>(p) >> 24) == 0x80) {
+            //
+            // ONLY for ACTIVE eth cores (those with an inter-chip peer, running the active-erisc app).
+            // An IDLE eth core posts the same GO to 0x490 but is launched by the idle-erisc base FW,
+            // which reads kernel_config_base[IDLE_ETH] (index 2), not [ACTIVE_ETH] -- and ttsim runs
+            // its kernel via the soft-reset / ierisc_reset_pc path instead (see SOFT_RESET_0 above).
+            // Intercepting an idle core's GO here would jump to a bogus ACTIVE_ETH entry (e.g. on a
+            // single-chip part every eth core is idle: regression at b0bca86). So gate on eth_peer and
+            // otherwise fall through to the plain mailbox store.
+            uint32_t go_peer_chip, go_peer_tile;
+            if (addr == 0x490 && size == 4 && (mem_rd<uint32_t>(p) >> 24) == 0x80 &&
+                eth_peer(tile_id, &go_peer_chip, &go_peer_tile)) {
                 memcpy(&g_e_tiles[tile_id].sram[addr], p, size);
                 const uint8_t *l1 = g_e_tiles[tile_id].sram;
                 uint32_t rd_ptr = mem_rd<uint32_t>(&l1[0x100 + 12]);
@@ -2399,7 +2414,19 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
                 uint8_t *ldm = g_e_tiles[tile_id].rv32_local_ram[0];
                 mem_wr<uint32_t>(&ldm[0xFFB00714 - RISCV_LOCAL_MEM_BASE], kcfg_base + mem_rd<uint16_t>(&l1[launch + 28]));
                 mem_wr<uint32_t>(&ldm[0xFFB00710 - RISCV_LOCAL_MEM_BASE], kcfg_base + mem_rd<uint16_t>(&l1[launch + 30]));
+                // Likewise fake firmware risc_init()'s my_x[]/my_y[] (FW-owned LDM globals my_y @ 0xFFB00708,
+                // my_x @ 0xFFB0070C, each uint8_t[NUM_NOCS]). risc_init sets my_x[n]/my_y[n] from
+                // NOC_CFG(NOC_ID_LOGICAL); the kernel later writes WorkerXY(my_x[0], my_y[0]) into a peer EDM's
+                // connection info at connect (edm_fabric_worker_adapters.hpp), and the peer credits back to that
+                // coord. Without this they stay 0, so the fabric router's free-space credit targets NOC (0,0)
+                // (DRAM) -- the multi-hop forwarding hang/abort. NOC_ID_LOGICAL here matches NOC_REGS_NOC_ID_LOGICAL.
+                uint32_t nidl = (20 + tile_id) | (25 << 6); // logical eth coord (20+tile_id, 25), both NOCs
+                for (uint32_t n = 0; n < 2; n++) { // NUM_NOCS == 2 on BH
+                    ldm[(0xFFB0070C - RISCV_LOCAL_MEM_BASE) + n] = nidl & 0x3F;        // my_x[n]
+                    ldm[(0xFFB00708 - RISCV_LOCAL_MEM_BASE) + n] = (nidl >> 6) & 0x3F; // my_y[n]
+                }
                 g_e_tiles[tile_id].rv32[0].pc = entry;
+                g_e_tiles[tile_id].rv32[0].x_regs[1] = 0; // ra=0: kernel_main returns here on exit
                 g_e_tiles[tile_id].rv32[0].x_regs[2] = 0xFFB02000; // sp = top of eth LDM
                 g_e_tiles[tile_id].rv32[0].x_regs[3] = 0xFFB00EF0; // gp = __global_pointer$
                 ttsim_rv32_set_core_active('E', tile_id, 0, true);
