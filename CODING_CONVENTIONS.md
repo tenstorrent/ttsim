@@ -26,7 +26,7 @@ This document defines coding style and technical conventions specific to this co
 - ASCII text only, no Unicode or binary files.
 - C/C++:
   - Brace style: match surrounding code (default: K&R + mandatory braces for all blocks).
-  - One declaration per line.
+  - One declaration/one statement per line.
   - Use `#pragma once` instead of include guards.
   - Use `nullptr` instead of `NULL`.
   - Prefer function-style casts `uint64_t(x)`, then C-style `(uint8_t *)x` if function-style not possible.

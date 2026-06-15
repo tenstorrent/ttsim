@@ -553,15 +553,16 @@ struct EthTile {
 #endif
 };
 
-#define ARC_CSM_SIZE (ARC_XBAR_CSM_LIMIT - ARC_XBAR_CSM_BASE + 1)
+#define ARC_CSM_SIZE (ARC_CSM_LIMIT - ARC_CSM_BASE + 1)
 
 struct ArcTile {
-#if TT_ARCH_VERSION == 0
     uint8_t csm[ARC_CSM_SIZE];
     uint32_t reset_unit_scratch[8];
     uint32_t arc_misc_cntl;
 
     uint32_t niu_cfg_0[NUM_NOCS];
+#if TT_ARCH_VERSION == 1
+    uint32_t scratch_ram[16];
 #endif
 };
 
@@ -608,6 +609,10 @@ struct DmaEngine {
 };
 #endif
 
+#if TT_ARCH_VERSION == 1
+uint32_t pcie_niu_rd32(uint32_t noc_instance, uint32_t offset);
+#endif
+
 struct PcieTile {
 #if TT_ARCH_VERSION == 0
     uint64_t tlb_cfg[186];
@@ -616,6 +621,7 @@ struct PcieTile {
     DmaEngine dma;
 #elif TT_ARCH_VERSION == 1
     uint32_t tlb_cfg[210*3];
+    uint32_t dbi_device_control;
 #endif
 };
 

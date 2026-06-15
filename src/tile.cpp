@@ -256,10 +256,10 @@ void e_tile_init(uint32_t tile_id) {
 #endif
 }
 
-#if TT_ARCH_VERSION == 0
-#define ARC_SMBUS_TELEMETRY_CSM_OFFSET 0x000
 #define ARC_TELEMETRY_TABLE_CSM_OFFSET 0x100
 #define ARC_TELEMETRY_VALUES_CSM_OFFSET 0x200
+#if TT_ARCH_VERSION == 0
+#define ARC_SMBUS_TELEMETRY_CSM_OFFSET 0x000
 #define LEGACY_TELEM_FW_BUNDLE_VERSION 49
 #define FLASH_BUNDLE_VERSION 0x12040000 // v18.4
 #if NUM_CHIPS > 1
@@ -270,6 +270,14 @@ void e_tile_init(uint32_t tile_id) {
 #define BOARD_ID_LOW 0x1
 #endif
 #define WH_X2_MANGLED_BOARD_ID 0x618320AE
+#elif TT_ARCH_VERSION == 1
+#define FLASH_BUNDLE_VERSION 0x12050000 // v18.5
+#if NUM_CHIPS == 1
+#define BOARD_ID_HIGH 0x400 // P150
+#else
+#define BOARD_ID_HIGH 0x440 // P300
+#endif
+#define BOARD_ID_LOW 0x1
 #endif
 
 #if TT_ARCH_VERSION == 0
@@ -474,12 +482,19 @@ bool wh_x2_legacy_remote_queue_host_wr(uint32_t coord, uint64_t addr, const void
 #endif
 
 void a_tile_init() {
+#if NUM_CHIPS <= 2
 #if TT_ARCH_VERSION == 0
     g_a_tile.reset_unit_scratch[0] = 0xC0DE0001;
 
     // UMD requires firmware version written to legacy csm region
     mem_wr<uint32_t>(
         &g_a_tile.csm[ARC_SMBUS_TELEMETRY_CSM_OFFSET + LEGACY_TELEM_FW_BUNDLE_VERSION * 4], FLASH_BUNDLE_VERSION);
+#elif TT_ARCH_VERSION == 1
+    g_a_tile.scratch_ram[13] = ARC_CSM_BASE + ARC_TELEMETRY_TABLE_CSM_OFFSET;
+    g_a_tile.scratch_ram[12] = ARC_CSM_BASE + ARC_TELEMETRY_VALUES_CSM_OFFSET;
+    g_a_tile.scratch_ram[2] = 1;  // ARC_BOOT_STATUS: bit 0 = ready to receive messages
+    g_a_tile.scratch_ram[11] = 0; // message-queue control block ptr: 0 = queue not modeled
+#endif
 
     // Not static: the table captures g_current_chip_id (ASIC_ID / ASIC_LOCATION below), so
     // it must be rebuilt for each chip rather than frozen at the first chip's a_tile_init.
@@ -491,6 +506,7 @@ void a_tile_init() {
         {2, BOARD_ID_LOW},
         {3, 1 + g_current_chip_id},     // ASIC_ID
         {4, 0x0},                       // HARVESTING_STATE
+        {14, 1000},                     // AICLK (MHz)
         {28, FLASH_BUNDLE_VERSION},
         {52, g_current_chip_id},        // ASIC_LOCATION
     };
@@ -535,7 +551,7 @@ static uint32_t tile_to_coord(char tile_type, uint32_t tile_id) {
         }
         tile_x += (tile_x >= 4) ? 2 : 1;
         return tile_x | (tile_y << 6);
-#elif TT_ARCH_VERSION == 1
+#else
         uint32_t tile_x;
         if (tile_id & 1) {
             tile_x = (13 - tile_id) / 2 + 7;
@@ -544,14 +560,19 @@ static uint32_t tile_to_coord(char tile_type, uint32_t tile_id) {
         }
         tile_x += (tile_x >= 7) ? 3 : 1;
         return tile_x | (1 << 6);
+#endif
+    } else if (tile_type == 'A') {
+        TTSIM_ASSERT(tile_id == 0);
+#if TT_ARCH_VERSION == 0
+        return (0 | (10 << 6));
 #else
-#error unsupported
+        return (8 | (0 << 6));
 #endif
     } else
-#if TT_ARCH_VERSION == 0
-    if (tile_type == 'A') {
-        TTSIM_ASSERT(tile_id == 0);
-        return (0 | (10 << 6));
+#if TT_ARCH_VERSION == 1
+    if (tile_type == 'P') {
+        TTSIM_VERIFY(!tile_id, UnsupportedFunctionality, "PCIE tile 1 access");
+        return (2 | (0 << 6));
     } else
 #endif
     {
@@ -559,8 +580,7 @@ static uint32_t tile_to_coord(char tile_type, uint32_t tile_id) {
     }
 }
 
-static std::pair<char, uint32_t> coord_to_tile(uint32_t coord)
-{
+static std::pair<char, uint32_t> coord_to_tile(uint32_t coord) {
     switch (coord) {
 #if TT_ARCH_VERSION == 0
         case 0 | (0 << 6):
@@ -626,6 +646,8 @@ static std::pair<char, uint32_t> coord_to_tile(uint32_t coord)
             return {'D', 7}; // DRAM channel 7
         case 2 | (0 << 6):
             return {'P', 0}; // PCIE tile 0
+        case 8 | (0 << 6):
+            return {'A', 0}; // ARC tile (just one)
         case 11 | (0 << 6):
             TTSIM_ERROR(UnsupportedFunctionality, "PCIE tile 1 access"); // would be {'P', 1}
 #endif
@@ -740,18 +762,18 @@ template<char tile_type>
 static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint32_t offset) {
     auto *p_tile = get_tile<tile_type>(tile_id);
     switch (offset) {
-#if TT_ARCH_VERSION == 0
         case RISCV_DEBUG_REGS_DBG_ARRAY_RD_DATA:
+#if TT_ARCH_VERSION == 0
             if constexpr (tile_type == 'T') {
                 TTSIM_VERIFY(p_tile->dbg_array_rd_en, UnsupportedFunctionality, "DBG_ARRAY_RD_DATA when DBG_ARRAY_RD_EN=0");
                 return p_tile->dbg_array_rd_data;
             }
             TTSIM_ERROR(UnsupportedFunctionality, "DBG_ARRAY_RD_DATA in eth tile");
+#else
+            TTSIM_ERROR(UnimplementedFunctionality, "DBG_ARRAY_RD_DATA");
 #endif
-#if TT_ARCH_VERSION == 1
         case RISCV_DEBUG_REGS_DBG_RD_DATA: TTSIM_ERROR(UnimplementedFunctionality, "DBG_RD_DATA");
         case RISCV_DEBUG_REGS_DBG_INSTRN_BUF_STATUS: TTSIM_ERROR(UnimplementedFunctionality, "DBG_INSTRN_BUF_STATUS");
-#endif
         case RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE:
             if constexpr (tile_type == 'T') {
                 return p_tile->tensix[0].dst_32bit_addr_en ? 0x800 : 0;
@@ -775,28 +797,30 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
             TTSIM_ERROR(UnsupportedFunctionality, "TRISC_RESET_PC_OVERRIDE in eth tile");
 #endif
         RISCV_DEBUG_REGS_RD_DEFAULT_CASES()
-        default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
+        default: TTSIM_ERROR(UndefinedBehavior, "offset=0x%x", offset);
     }
 }
 
 static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t offset, uint32_t data) {
     TensixTile *p_tile = &g_t_tiles[tile_id];
     switch (offset) {
-#if TT_ARCH_VERSION == 1
         case RISCV_DEBUG_REGS_DBG_BUS_CTRL: TTSIM_ERROR(UnimplementedFunctionality, "DBG_BUS_CTRL");
-#endif
         case RISCV_DEBUG_REGS_TENSIX_CREG_READ:
             TTSIM_ERROR(UntestedFunctionality, "TENSIX_CREG_READ");
             TTSIM_VERIFY(data < TENSIX_CFG_STATE_SIZE*4, UnimplementedFunctionality,
                 "TENSIX_CREG_READ: data=0x%x", data);
             p_tile->tensix_creg_rddata = tensix_cfg_rd32(&p_tile->tensix[0], 0, 4*data);
             break;
-#if TT_ARCH_VERSION == 0
         case RISCV_DEBUG_REGS_DBG_ARRAY_RD_EN:
+#if TT_ARCH_VERSION == 0
             TTSIM_VERIFY(data <= 1, UnsupportedFunctionality, "DBG_ARRAY_RD_EN: data=0x%x", data);
             p_tile->dbg_array_rd_en = data;
+#else
+            TTSIM_ERROR(UnimplementedFunctionality, "DBG_ARRAY_RD_EN");
+#endif
             break;
         case RISCV_DEBUG_REGS_DBG_ARRAY_RD_CMD: {
+#if TT_ARCH_VERSION == 0
             TTSIM_VERIFY(p_tile->dbg_array_rd_en, UnsupportedFunctionality, "DBG_ARRAY_RD_CMD when DBG_ARRAY_RD_EN=0");
             uint32_t row = bits<11,0>(data);
             uint32_t sel = bits<15,12>(data);
@@ -805,9 +829,11 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
             TTSIM_VERIFY(sel < 8, UnsupportedFunctionality, "DBG_ARRAY_RD_CMD: sel=%d", sel);
             TTSIM_VERIFY(upper == 2, MissingSpecification, "DBG_ARRAY_RD_CMD: upper=0x%x", upper);
             p_tile->dbg_array_rd_data = p_tile->tensix[0].dst[row][2*sel] | (uint32_t(p_tile->tensix[0].dst[row][2*sel+1]) << 16);
+#else
+            TTSIM_ERROR(UnimplementedFunctionality, "DBG_ARRAY_RD_CMD");
+#endif
             break;
         }
-#endif
         case RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE:
             TTSIM_VERIFY(!data || (data == 0x800), UnimplementedFunctionality, "DBG_FEATURE_DISABLE=0x%x", data);
             p_tile->tensix[0].dst_32bit_addr_en = bits<11,11>(data);
@@ -860,7 +886,7 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
         case RISCV_DEBUG_REGS_DEST_CG_CTRL: break;
 #endif
         RISCV_DEBUG_REGS_WR_DEFAULT_CASES()
-        default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
+        default: TTSIM_ERROR(UndefinedBehavior, "offset=0x%x", offset);
     }
 }
 
@@ -960,6 +986,35 @@ static uint32_t noc_node_id(uint32_t noc_instance, uint32_t coord) {
     return coord | (17 << 12) | (12 << 19) | (routing_dir << 28);
 #endif
 }
+
+#if TT_ARCH_VERSION == 1
+uint32_t pcie_niu_rd32(uint32_t noc_instance, uint32_t offset) {
+    switch (offset) {
+        case NOC_REGS_NOC_NODE_ID:
+            return noc_node_id(noc_instance, tile_to_coord('P', 0));
+        case NOC_REGS_NIU_CFG_0:
+            return 1u << 14;// Bit 14 advertises NoC coordinate translation, which the sim always models
+        default:
+            TTSIM_ERROR(UnimplementedFunctionality, "pcie_niu: noc=%d offset=0x%x", noc_instance, offset);
+    }
+}
+
+static uint32_t pcie_dbi_rd32(uint64_t offset) {
+    switch (offset) {
+        case DBI_DEVICE_CONTROL_DEVICE_STATUS: return g_p_tile.dbi_device_control;
+        default:
+            TTSIM_ERROR(UnimplementedFunctionality, "pcie_dbi: offset=0x%llx", offset);
+    }
+}
+
+static void pcie_dbi_wr32(uint64_t offset, uint32_t value) {
+    switch (offset) {
+        case DBI_DEVICE_CONTROL_DEVICE_STATUS: g_p_tile.dbi_device_control = value; break;
+        default:
+            TTSIM_ERROR(UnimplementedFunctionality, "pcie_dbi: offset=0x%llx", offset);
+    }
+}
+#endif
 
 template<char tile_type>
 static uint32_t noc_regs_rd32(uint32_t tile_id, uint32_t noc_instance, uint32_t offset) {
@@ -2120,30 +2175,39 @@ static uint64_t translate_pci_dma_addr(uint64_t addr, uint32_t size) {
 #endif
 }
 
-#if TT_ARCH_VERSION == 0
+#define ARC_MISC_CNTL_IRQ0 (1u << 16)
+
 static uint32_t arc_reset_unit_rd32(uint32_t offset) {
     TTSIM_ASSERT(!(offset & 3));
     switch (offset) {
+#if TT_ARCH_VERSION == 0
         case RESET_UNIT_SCRATCH(1):
             TTSIM_ERROR(UndefinedBehavior, "scratch 1 is reserved");
         case RESET_UNIT_SCRATCH(0):
         case RESET_UNIT_SCRATCH(2) ... RESET_UNIT_SCRATCH(7):
+#else
+        case RESET_UNIT_SCRATCH(0) ... RESET_UNIT_SCRATCH(7):
+#endif
             return g_a_tile.reset_unit_scratch[(offset - RESET_UNIT_SCRATCH(0)) / 4];
         case RESET_UNIT_ARC_MISC_CNTL:
             return g_a_tile.arc_misc_cntl;
+#if TT_ARCH_VERSION == 0
         case RESET_UNIT_NOC_NODEID_X_0:
             return ARC_TELEMETRY_TABLE_CSM_OFFSET;
         case RESET_UNIT_NOC_NODEID_Y_0:
             return ARC_TELEMETRY_VALUES_CSM_OFFSET;
         case RESET_UNIT_ARC_MSG_QCB_PTR:
             return 0; // indicates firmware does not support ARC msg queue
+#elif TT_ARCH_VERSION == 1
+        case RESET_UNIT_SCRATCH_RAM(0) ... RESET_UNIT_SCRATCH_RAM(15):
+            return g_a_tile.scratch_ram[(offset - RESET_UNIT_SCRATCH_RAM(0)) / 4];
+#endif
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
     }
 }
 
-#define ARC_MISC_CNTL_IRQ0 (1u << 16)
-
+#if TT_ARCH_VERSION == 0
 static void arc_service_message() {
     uint8_t code = g_a_tile.reset_unit_scratch[5] & 0xff;
     uint32_t exit_code = 0;
@@ -2178,20 +2242,34 @@ static void arc_service_message() {
     g_a_tile.reset_unit_scratch[5] = (exit_code << 16) | code;
     g_a_tile.arc_misc_cntl &= ~ARC_MISC_CNTL_IRQ0;
 }
+#endif
 
 static void arc_reset_unit_wr32(uint32_t offset, uint32_t value) {
     TTSIM_ASSERT(!(offset & 3));
     switch (offset) {
+#if TT_ARCH_VERSION == 0
         case RESET_UNIT_SCRATCH(1):
             TTSIM_ERROR(UndefinedBehavior, "scratch 1 is reserved");
         case RESET_UNIT_SCRATCH(0):
         case RESET_UNIT_SCRATCH(2) ... RESET_UNIT_SCRATCH(7):
+#else
+        case RESET_UNIT_SCRATCH(0) ... RESET_UNIT_SCRATCH(7):
+#endif
             g_a_tile.reset_unit_scratch[(offset - RESET_UNIT_SCRATCH(0)) / 4] = value;
             break;
+#if TT_ARCH_VERSION == 1
+        case RESET_UNIT_SCRATCH_RAM(0) ... RESET_UNIT_SCRATCH_RAM(15):
+            g_a_tile.scratch_ram[(offset - RESET_UNIT_SCRATCH_RAM(0)) / 4] = value;
+            break;
+#endif
         case RESET_UNIT_ARC_MISC_CNTL:
             g_a_tile.arc_misc_cntl = value;
             if (value & ARC_MISC_CNTL_IRQ0) {
+#if TT_ARCH_VERSION == 0
                 arc_service_message();
+#else
+                TTSIM_ERROR(UnimplementedFunctionality, "ARC message queue not modeled");
+#endif
             }
             break;
         default:
@@ -2227,74 +2305,80 @@ static void arc_apb_wr32(uint32_t apb_offset, uint32_t value) {
         case ARC_APB_RESET_UNIT_BASE ... ARC_APB_RESET_UNIT_LIMIT:
             arc_reset_unit_wr32(apb_offset - ARC_APB_RESET_UNIT_BASE, value);
             break;
+#if TT_ARCH_VERSION == 1
+        case ARC_APB_MSI_FIFO_BASE ... ARC_APB_MSI_FIFO_LIMIT:
+            TTSIM_ERROR(UnimplementedFunctionality, "BH ARC message queue (ARC_MSI_FIFO doorbell) not modeled");
+#endif
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", apb_offset);
     }
 }
 
 static void arc_tile_rd_bytes(uint64_t addr, void *p, uint32_t size) {
+#if TT_ARCH_VERSION == 0
     switch (addr) {
-        case ARC_NOC_XBAR_BASE ... ARC_NOC_XBAR_LIMIT: {
-            uint32_t xbar_addr = addr - ARC_NOC_XBAR_BASE;
-            switch (xbar_addr) {
-                case ARC_XBAR_CSM_BASE ... ARC_XBAR_CSM_LIMIT: {
-                    uint32_t csm_offset = xbar_addr - ARC_XBAR_CSM_BASE;
-                    TTSIM_VERIFY(uint64_t(csm_offset) + uint64_t(size) <= ARC_CSM_SIZE, UndefinedBehavior,
-                                 "arc_csm overrun: offset=0x%x size=%d", csm_offset, size);
-                    memcpy(p, &g_a_tile.csm[csm_offset], size);
-                    break;
-                }
-                case ARC_XBAR_APB_BASE ... ARC_XBAR_APB_LIMIT: {
-                    uint32_t apb_offset = xbar_addr - ARC_XBAR_APB_BASE;
-                    TTSIM_VERIFY((size == 4) && !(apb_offset & 3), UndefinedBehavior,
-                                 "arc_apb: offset=0x%x size=%d", apb_offset, size);
-                    mem_wr<uint32_t>(p, arc_apb_rd32(apb_offset));
-                    break;
-                }
-                default:
-                    TTSIM_ERROR(UnimplementedFunctionality, "arc xbar: addr=0x%llx size=%d", addr, size);
-            }
-            break;
-        }
-        case ARC_NOC_NIU0_BASE ... ARC_NOC_NIU0_LIMIT: {
+        case ARC_NOC_NIU0_BASE ... ARC_NOC_NIU0_LIMIT:
             TTSIM_VERIFY((size == 4) && !(addr & 3), UndefinedBehavior, "arc_niu: addr=0x%llx size=%d", addr, size);
             mem_wr<uint32_t>(p, arc_niu_rd32(0, addr - ARC_NOC_NIU0_BASE));
-            break;
-        }
-        case ARC_NOC_NIU1_BASE ... ARC_NOC_NIU1_LIMIT: {
+            return;
+        case ARC_NOC_NIU1_BASE ... ARC_NOC_NIU1_LIMIT:
             TTSIM_VERIFY((size == 4) && !(addr & 3), UndefinedBehavior, "arc_niu: addr=0x%llx size=%d", addr, size);
             mem_wr<uint32_t>(p, arc_niu_rd32(1, addr - ARC_NOC_NIU1_BASE));
+            return;
+    }
+    TTSIM_VERIFY((addr >= ARC_NOC_XBAR_BASE) && (addr <= ARC_NOC_XBAR_LIMIT), UnimplementedFunctionality,
+                 "arc: addr=0x%llx size=%d", addr, size);
+    uint64_t offset = addr - ARC_NOC_XBAR_BASE;
+#else
+    uint64_t offset = addr;
+#endif
+    switch (offset) {
+        case ARC_CSM_BASE ... ARC_CSM_LIMIT: {
+            uint32_t csm_offset = offset - ARC_CSM_BASE;
+            TTSIM_VERIFY(uint64_t(csm_offset) + uint64_t(size) <= ARC_CSM_SIZE, UndefinedBehavior,
+                         "arc_csm overrun: offset=0x%x size=%d", csm_offset, size);
+            memcpy(p, &g_a_tile.csm[csm_offset], size);
+            break;
+        }
+        case ARC_APB_BASE ... ARC_APB_LIMIT: {
+            uint32_t apb_offset = offset - ARC_APB_BASE;
+            TTSIM_VERIFY((size == 4) && !(apb_offset & 3), UndefinedBehavior,
+                         "arc_apb: offset=0x%x size=%d", apb_offset, size);
+            mem_wr<uint32_t>(p, arc_apb_rd32(apb_offset));
             break;
         }
         default:
-            TTSIM_ERROR(UnimplementedFunctionality, "arc: addr=0x%llx size=%d", addr, size);
+            TTSIM_ERROR(UnimplementedFunctionality, "arc: offset=0x%llx size=%d", offset, size);
     }
 }
 
 static void arc_tile_wr_bytes(uint64_t addr, const void *p, uint32_t size) {
+#if TT_ARCH_VERSION == 0
     TTSIM_VERIFY((addr >= ARC_NOC_XBAR_BASE) && (addr + size <= ARC_NOC_XBAR_LIMIT + 1),
                  UnimplementedFunctionality, "arc: addr=0x%llx size=%d", addr, size);
-    uint32_t xbar_addr = addr - ARC_NOC_XBAR_BASE;
-    switch (xbar_addr) {
-        case ARC_XBAR_CSM_BASE ... ARC_XBAR_CSM_LIMIT: {
-            uint32_t csm_offset = xbar_addr - ARC_XBAR_CSM_BASE;
+    uint64_t offset = addr - ARC_NOC_XBAR_BASE;
+#else
+    uint64_t offset = addr;
+#endif
+    switch (offset) {
+        case ARC_CSM_BASE ... ARC_CSM_LIMIT: {
+            uint32_t csm_offset = offset - ARC_CSM_BASE;
             TTSIM_VERIFY(uint64_t(csm_offset) + uint64_t(size) <= ARC_CSM_SIZE, UndefinedBehavior,
                          "arc_csm overrun: offset=0x%x size=%d", csm_offset, size);
             memcpy(&g_a_tile.csm[csm_offset], p, size);
             break;
         }
-        case ARC_XBAR_APB_BASE ... ARC_XBAR_APB_LIMIT: {
-            uint32_t apb_offset = xbar_addr - ARC_XBAR_APB_BASE;
+        case ARC_APB_BASE ... ARC_APB_LIMIT: {
+            uint32_t apb_offset = offset - ARC_APB_BASE;
             TTSIM_VERIFY((size == 4) && !(apb_offset & 3), UndefinedBehavior,
                          "arc_apb: offset=0x%x size=%d", apb_offset, size);
             arc_apb_wr32(apb_offset, mem_rd<uint32_t>(p));
             break;
         }
         default:
-            TTSIM_ERROR(UnimplementedFunctionality, "arc: addr=0x%llx size=%d", addr, size);
+            TTSIM_ERROR(UnimplementedFunctionality, "arc: offset=0x%llx size=%d", offset, size);
     }
 }
-#endif
 
 void tile_rd_bytes(uint32_t coord, uint64_t addr, void *p, uint32_t size) {
     auto [tile_type, tile_id] = coord_to_tile(coord);
@@ -2333,12 +2417,17 @@ void tile_rd_bytes(uint32_t coord, uint64_t addr, void *p, uint32_t size) {
         }
     } else if (tile_type == 'P') {
         TTSIM_VERIFY(!tile_id, UnimplementedFunctionality, "tile=%c%d", tile_type, tile_id);
+#if TT_ARCH_VERSION == 1
+        if ((addr >= PCIE_DBI_BASE) && (addr <= PCIE_DBI_LIMIT)) {
+            TTSIM_VERIFY((size == 4) && !(addr & 3), UndefinedBehavior, "pcie_dbi: addr=0x%llx size=%d", addr, size);
+            mem_wr<uint32_t>(p, pcie_dbi_rd32(addr - PCIE_DBI_BASE));
+            return;
+        }
+#endif
         libttsim_pci_dma_mem_rd_bytes(translate_pci_dma_addr(addr, size), p, size);
-#if TT_ARCH_VERSION == 0
     } else if (tile_type == 'A') {
         TTSIM_VERIFY(!tile_id, UnimplementedFunctionality, "tile=%c%d", tile_type, tile_id);
         arc_tile_rd_bytes(addr, p, size);
-#endif
     } else {
         TTSIM_ERROR(UnimplementedFunctionality, "tile_type=%c", tile_type);
     }
@@ -2479,12 +2568,17 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
         }
     } else if (tile_type == 'P') {
         TTSIM_VERIFY(!tile_id, UnimplementedFunctionality, "tile=%c%d", tile_type, tile_id);
+#if TT_ARCH_VERSION == 1
+        if ((addr >= PCIE_DBI_BASE) && (addr <= PCIE_DBI_LIMIT)) {
+            TTSIM_VERIFY((size == 4) && !(addr & 3), UndefinedBehavior, "pcie_dbi: addr=0x%llx size=%d", addr, size);
+            pcie_dbi_wr32(addr - PCIE_DBI_BASE, mem_rd<uint32_t>(p));
+            return;
+        }
+#endif
         libttsim_pci_dma_mem_wr_bytes(translate_pci_dma_addr(addr, size), p, size);
-#if TT_ARCH_VERSION == 0
     } else if (tile_type == 'A') {
         TTSIM_VERIFY(!tile_id, UnimplementedFunctionality, "tile=%c%d", tile_type, tile_id);
         arc_tile_wr_bytes(addr, p, size);
-#endif
     } else {
         TTSIM_ERROR(UnimplementedFunctionality, "tile_type=%c", tile_type);
     }

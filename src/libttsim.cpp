@@ -34,10 +34,10 @@
 // WH BAR4 is mapped to the top 32MB of BAR0
 #define BAR4_SOC_BASE (BAR0_BASE + BAR0_SIZE - BAR4_SIZE)
 
-#define ARC_CSM_BASE 0x1FE80000
-#define ARC_CSM_LIMIT 0x1FEFFFFF
-#define ARC_APB_BASE 0x1FF00000
-#define ARC_APB_LIMIT 0x1FFFFFFF
+#define ARC_BAR0_CSM_BASE 0x1FE80000
+#define ARC_BAR0_CSM_LIMIT 0x1FEFFFFF
+#define ARC_BAR0_APB_BASE 0x1FF00000
+#define ARC_BAR0_APB_LIMIT 0x1FFFFFFF
 #define ARC_COORD (0 | (10 << 6))
 #define ARC_NOC_CSM_BASE 0x810000000ull
 #define ARC_NOC_APB_BASE 0x880000000ull
@@ -49,6 +49,11 @@
 #define IATU_OUTBOUND_WINDOW_LIMIT 0xFFFDFFFFu
 
 #define DMA_BUFFER_SIZE (4u * 1024)
+#elif TT_ARCH_VERSION == 1
+#define PCIE_NIU0_BASE 0x1FD04000
+#define PCIE_NIU0_LIMIT 0x1FD05FFF
+#define PCIE_NIU1_BASE 0x1FD14000
+#define PCIE_NIU1_LIMIT 0x1FD15FFF
 #endif
 
 static bool s_ttsim_running = false;
@@ -405,14 +410,22 @@ static void pci_mem_rd_cur(uint64_t paddr, void *p, uint32_t size) {
                     tlb_window_read(offset, p, size);
                     break;
                 }
-#if TT_ARCH_VERSION == 0
-                case ARC_CSM_BASE ... ARC_CSM_LIMIT: {
-                    uint32_t csm_offset = offset - ARC_CSM_BASE;
+#if TT_ARCH_VERSION == 1
+                case PCIE_NIU0_BASE ... PCIE_NIU0_LIMIT:
+                case PCIE_NIU1_BASE ... PCIE_NIU1_LIMIT: {
+                    TTSIM_VERIFY((size == 4) && !(offset & 3), UndefinedBehavior, "pcie_niu: offset=0x%llx size=%d", offset, size);
+                    uint32_t noc = (offset >= PCIE_NIU1_BASE);
+                    mem_wr<uint32_t>(p, pcie_niu_rd32(noc, offset - (noc ? PCIE_NIU1_BASE : PCIE_NIU0_BASE)));
+                    break;
+                }
+#elif TT_ARCH_VERSION == 0
+                case ARC_BAR0_CSM_BASE ... ARC_BAR0_CSM_LIMIT: {
+                    uint32_t csm_offset = offset - ARC_BAR0_CSM_BASE;
                     tile_rd_bytes(ARC_COORD, ARC_NOC_CSM_BASE + csm_offset, p, size);
                     break;
                 }
-                case ARC_APB_BASE ... ARC_APB_LIMIT: {
-                    uint32_t apb_offset = offset - ARC_APB_BASE;
+                case ARC_BAR0_APB_BASE ... ARC_BAR0_APB_LIMIT: {
+                    uint32_t apb_offset = offset - ARC_BAR0_APB_BASE;
                     tile_rd_bytes(ARC_COORD, ARC_NOC_APB_BASE + apb_offset, p, size);
                     break;
                 }
@@ -530,13 +543,13 @@ static void pci_mem_wr_cur(uint64_t paddr, const void *p, uint32_t size) {
                     }
                     break;
                 }
-                case ARC_CSM_BASE ... ARC_CSM_LIMIT: {
-                    uint32_t csm_offset = offset - ARC_CSM_BASE;
+                case ARC_BAR0_CSM_BASE ... ARC_BAR0_CSM_LIMIT: {
+                    uint32_t csm_offset = offset - ARC_BAR0_CSM_BASE;
                     tile_wr_bytes(ARC_COORD, ARC_NOC_CSM_BASE + csm_offset, p, size);
                     break;
                 }
-                case ARC_APB_BASE ... ARC_APB_LIMIT: {
-                    uint32_t apb_offset = offset - ARC_APB_BASE;
+                case ARC_BAR0_APB_BASE ... ARC_BAR0_APB_LIMIT: {
+                    uint32_t apb_offset = offset - ARC_BAR0_APB_BASE;
                     tile_wr_bytes(ARC_COORD, ARC_NOC_APB_BASE + apb_offset, p, size);
                     break;
                 }

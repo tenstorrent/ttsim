@@ -83,7 +83,6 @@ static void mop_cfg(TensixState *p_tensix, uint32_t pipe, uint32_t inst) {
     p_tensix->mop_zmask_hi16[pipe] = bits<15,0>(inst);
 }
 
-// XXX whether we generate or swallow NOPs matters for downstream REPLAY; have been a bit careless about this
 static void mop_expander(TensixState *p_tensix, uint32_t pipe, uint32_t inst) {
     uint32_t zlo = bits<15,0>(inst);
     uint32_t loop_count = bits<22,16>(inst);
@@ -127,9 +126,9 @@ static void mop_expander(TensixState *p_tensix, uint32_t pipe, uint32_t inst) {
     uint32_t loop_op = p_tensix->mop_cfg[pipe][5];
     uint32_t loop_op1 = p_tensix->mop_cfg[pipe][6];
     uint32_t loop0_last_instr = p_tensix->mop_cfg[pipe][7];
-    TTSIM_VERIFY(loop0_last_instr != TENSIX_NOP, UnimplementedFunctionality, "loop0_last_instr=0x%x", loop0_last_instr);
+    TTSIM_VERIFY(loop0_last_instr != TENSIX_NOP, UntestedFunctionality, "loop0_last_instr=0x%x", loop0_last_instr);
     uint32_t loop1_last_instr = p_tensix->mop_cfg[pipe][8];
-    TTSIM_VERIFY(loop1_last_instr != TENSIX_NOP, UnimplementedFunctionality, "loop1_last_instr=0x%x", loop1_last_instr);
+    TTSIM_VERIFY(loop1_last_instr != TENSIX_NOP, UntestedFunctionality, "loop1_last_instr=0x%x", loop1_last_instr);
 
     uint32_t loop_op_flip = 0;
     if (!IS_TENSIX_NOP(loop_op1)) {
@@ -198,7 +197,7 @@ static void seed_prng(TensixState *p_tensix, uint32_t seed) {
 
 uint32_t tensix_cfg_rd32(TensixState *p_tensix, uint32_t bank, uint32_t offset) {
     TTSIM_VERIFY(!(offset & 3), AssertionFailure, "misaligned offset=0x%x", offset);
-    switch (offset / 4) {
+    switch (uint32_t reg = offset / 4) {
 #define CFG_REG_BANKED_RD(i) case i: return p_tensix->config[bank].cfg##i;
 #define CFG_REG_RD(i) case i: return p_tensix->cfg##i;
         CFG_REG_BANKED_RD(0)
@@ -299,7 +298,7 @@ uint32_t tensix_cfg_rd32(TensixState *p_tensix, uint32_t bank, uint32_t offset) 
 #endif
 #undef CFG_REG_BANKED_RD
 #undef CFG_REG_RD
-        default: TTSIM_ERROR(UnimplementedFunctionality, "reg=%d", offset / 4); // cfg_defines.h has these in decimal
+        default: TTSIM_ERROR(UnimplementedFunctionality, "reg=%d", reg);
     }
 }
 
@@ -308,7 +307,7 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
     TensixTile *p_tile = &g_t_tiles[p_tensix->tile_id];
 #endif
     TTSIM_VERIFY(!(offset & 3), AssertionFailure, "misaligned offset=0x%x", offset);
-    switch (offset / 4) {
+    switch (uint32_t reg = offset / 4) {
 #define CFG_REG_BANKED_WR(i) case i: p_tensix->config[bank].cfg##i = data & CFG##i##_REG_MASK; break;
 #define CFG_REG_WR(i) case i: p_tensix->cfg##i = data & CFG##i##_REG_MASK; break;
         CFG_REG_BANKED_WR(0)
@@ -316,6 +315,7 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
         CFG_REG_BANKED_WR(2)
         CFG_REG_BANKED_WR(3)
 #if TT_ARCH_VERSION == 0
+        case 4 ... 7: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(8)
         CFG_REG_BANKED_WR(9)
         CFG_REG_BANKED_WR(14)
@@ -329,18 +329,21 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
         CFG_REG_BANKED_WR(25)
         CFG_REG_BANKED_WR(26)
         CFG_REG_BANKED_WR(27)
+        case 28 ... 31: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(41)
         CFG_REG_BANKED_WR(44)
         CFG_REG_BANKED_WR(45)
         CFG_REG_BANKED_WR(47)
         CFG_REG_BANKED_WR(52)
         case 53: p_tensix->config[bank].cfg53 = data; break;
+        case 54 ... 55: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(56)
         CFG_REG_BANKED_WR(57)
         CFG_REG_BANKED_WR(58)
         CFG_REG_BANKED_WR(59)
         CFG_REG_BANKED_WR(60)
         CFG_REG_BANKED_WR(61)
+        case 62 ... 63: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(64)
         CFG_REG_BANKED_WR(65)
         CFG_REG_BANKED_WR(72)
@@ -353,12 +356,14 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
         CFG_REG_BANKED_WR(87)
         CFG_REG_BANKED_WR(92)
         case 93: p_tensix->config[bank].cfg93 = data; break;
+        case 94 ... 95: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(96)
         CFG_REG_BANKED_WR(97)
         CFG_REG_BANKED_WR(98)
         CFG_REG_BANKED_WR(99)
         CFG_REG_BANKED_WR(100)
         CFG_REG_BANKED_WR(101)
+        case 102 ... 103: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(104)
         CFG_REG_BANKED_WR(105)
         CFG_REG_BANKED_WR(124)
@@ -386,6 +391,7 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
         case 163: p_tile->ncrisc_reset_pc_override = data; break; // NCRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en
         case 164: seed_prng(p_tensix, data); break; // PRNG_SEED_Seed_Val
 #elif TT_ARCH_VERSION == 1
+        case 4 ... 11: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(12)
         CFG_REG_BANKED_WR(13)
         CFG_REG_BANKED_WR(14)
@@ -400,18 +406,22 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
         case 29: break;
         case 30: break;
         case 31: break;
+        case 32 ... 35: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
+        case 40 ... 43: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(50)
         CFG_REG_BANKED_WR(56)
         CFG_REG_BANKED_WR(57)
         CFG_REG_BANKED_WR(59)
         CFG_REG_BANKED_WR(64)
         case 65: p_tensix->config[bank].cfg65 = data; break;
+        case 66 ... 67: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(68)
         CFG_REG_BANKED_WR(69)
         CFG_REG_BANKED_WR(70)
         CFG_REG_BANKED_WR(71)
         CFG_REG_BANKED_WR(72)
         CFG_REG_BANKED_WR(73)
+        case 74 ... 75: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(76)
         CFG_REG_BANKED_WR(77)
         CFG_REG_BANKED_WR(84)
@@ -420,9 +430,11 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
         CFG_REG_BANKED_WR(93)
         CFG_REG_BANKED_WR(112)
         case 113: p_tensix->config[bank].cfg113 = data; break;
-        case 119: TTSIM_VERIFY(!data, UnimplementedFunctionality, "reg=%d data=0x%x", offset / 4, data); break;
+        case 114 ... 115: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
+        case 119: TTSIM_VERIFY(!data, UnimplementedFunctionality, "reg=%d data=0x%x", reg, data); break;
         CFG_REG_BANKED_WR(120)
         CFG_REG_BANKED_WR(121)
+        case 122 ... 123: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(124)
         CFG_REG_BANKED_WR(125)
         CFG_REG_WR(180)
@@ -446,7 +458,7 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
 #endif
 #undef CFG_REG_BANKED_WR
 #undef CFG_REG_WR
-        default: TTSIM_ERROR(UnimplementedFunctionality, "reg=%d", offset / 4); // cfg_defines.h has these in decimal
+        default: TTSIM_ERROR(UnimplementedFunctionality, "reg=%d", reg);
     }
 
     // Registers/fields where we enforce that values cannot be set; this simplifies state machines elsewhere
@@ -2165,10 +2177,10 @@ TENSIX_EXECUTE_PACR() {
                 bool read_unsigned = p_config->PCK_DEST_RD_CTRL_Read_unsigned;
                 if (p_config->PCK_DEST_RD_CTRL_Read_32b_data) {
                     value = read_dst32b(p_tensix, row, col);
-                    if (intermediate_format == 9) { // uint16 -- XXX there has been some discussion that this mode should not be used by SW
-                        value >>= 16;
+                    if (intermediate_format == 9) { // uint16
+                        value >>= 16; // XXX tt-isa-docs calls this mode out as "No", should this case be illegal?
                     } else {
-                        value = dst_decode_fp32(value); // XXX should this be applied to uint16?
+                        value = dst_decode_fp32(value);
                         if ((intermediate_format == 5) || (intermediate_format == 6)) {
                             TTSIM_VERIFY(!read_raw, UnimplementedFunctionality, "fp32 to bf16/bfp8: read_raw=%d", read_raw);
                             if ((value & 0x7FFFFFFF) > 0x7F800000) {
@@ -2291,13 +2303,12 @@ TENSIX_EXECUTE_PACR() {
                     uint32_t max_exp = 0;
                     for (uint32_t j = 0; j < 16; j++) {
                         uint32_t e = (bfp_buffer[j] >> 7) & 255;
-                        max_exp = std::max(max_exp, e);
+                        max_exp = std::max(max_exp, e); // note that e=255 is treated as an extended normal here
                     }
                     uint32_t sram_exp_addr = dst_exp_addr + i/16;
                     TTSIM_VERIFY(sram_exp_addr < TENSIX_SRAM_SIZE, UndefinedBehavior, "out of bounds sram_exp_addr=0x%x", sram_exp_addr);
                     mem_wr<uint8_t>(&g_t_tiles[p_tensix->tile_id].sram[sram_exp_addr], max_exp);
                     for (uint32_t j = 0; j < 16; j++) {
-                        // XXX Need to validate special cases here more carefully (e=0 and e=255 inputs in particular)
                         uint32_t s = bfp_buffer[j] >> 15;
                         uint32_t e = (bfp_buffer[j] >> 7) & 255;
                         uint32_t m = bfp_buffer[j] & 127;
@@ -2315,8 +2326,8 @@ TENSIX_EXECUTE_PACR() {
                             }
                         }
                         m >>= 8 - dst_element_size_bits;
-                        if (m) {
-                            m |= s << (dst_element_size_bits - 1); // only set sign bit if mantissa is nonzero, since negative zero is used for -inf
+                        if (m) { // only set sign bit if mantissa is nonzero, since negative zero is used for -inf
+                            m |= s << (dst_element_size_bits - 1);
                         }
                         uint32_t sram_addr_element_bits = sram_addr_bits - dst_element_size_bits*(15 - j);
                         uint8_t *p_byte = &g_t_tiles[p_tensix->tile_id].sram[sram_addr_element_bits >> 3];
@@ -2496,13 +2507,13 @@ TENSIX_EXECUTE_UNPACR() {
     bool tileize = unpack_block_selection ? p_config->THCON_SEC1_REG2_Tileize_mode
                                           : p_config->THCON_SEC0_REG2_Tileize_mode;
 #if TT_ARCH_VERSION == 1
-    // XXX Should this be <= 8 or == 8? I suspect <= 8 is correct, == 8 seems odd
-    const uint32_t unpack_row_width = (in_element_size_bits == 8) ? 16 : 32;
+    const uint32_t unpack_row_width = (in_element_size_bits <= 8) ? 16 : 32;
 #else
     const uint32_t unpack_row_width = 16;
 #endif
     uint32_t row_stride;
     if (tileize) {
+        TTSIM_VERIFY(in_element_size_bits >= 8, UndefinedBehavior, "tileize incompatible with in_element_size_bits=%d", in_element_size_bits);
         if (unpack_block_selection) {
             TTSIM_ERROR(UnimplementedFunctionality, "tileize unpack1");
         } else {
@@ -2569,10 +2580,10 @@ TENSIX_EXECUTE_UNPACR() {
         TTSIM_VERIFY(dst_addr >= 64, UnsupportedFunctionality, "cannot skip first 4 rows on unpack0 with dst_addr=%d", dst_addr);
         dst_addr -= 64;
     }
-    TTSIM_VERIFY(!(dst_addr % ROW_SIZE), UnimplementedFunctionality, "misaligned dst_addr=%d", dst_addr);
+    TTSIM_VERIFY(!(dst_addr % ROW_SIZE), UnsupportedFunctionality, "misaligned dst_addr=%d", dst_addr);
 
-    uint32_t upsample_rate = unpack_context ? p_config->THCON_SEC1_REG2_Upsample_rate : p_config->THCON_SEC0_REG2_Upsample_rate;
-    bool upsample_interleave = unpack_context ? p_config->THCON_SEC1_REG2_Upsample_and_interleave : p_config->THCON_SEC0_REG2_Upsample_and_interleave;
+    uint32_t upsample_rate = unpack_block_selection ? p_config->THCON_SEC1_REG2_Upsample_rate : p_config->THCON_SEC0_REG2_Upsample_rate;
+    bool upsample_interleave = unpack_block_selection ? p_config->THCON_SEC1_REG2_Upsample_and_interleave : p_config->THCON_SEC0_REG2_Upsample_and_interleave;
     uint32_t col_shift = 0;
     if (!tileize && !unpack_block_selection) {
         col_shift = unpack_context ? p_config->THCON_SEC0_REG2_Shift_amount_cntx1 :
@@ -2590,6 +2601,36 @@ TENSIX_EXECUTE_UNPACR() {
         TTSIM_VERIFY(p_tensix->thread[pipe].SRCA_SET_SetOvrdWithAddr, UnsupportedFunctionality, "!unpack_to_dst: SRCA_SET_SetOvrdWithAddr=0");
     }
 
+    uint32_t throttle_mode = unpack_block_selection ? p_config->THCON_SEC1_REG2_Throttle_mode
+                                                    : p_config->THCON_SEC0_REG2_Throttle_mode;
+#if TT_ARCH_VERSION == 0
+    TTSIM_VERIFY(throttle_mode <= 2, UndefinedBehavior, "invalid throttle_mode=%d", throttle_mode);
+#endif
+    if (!unpack_to_dst && !unpack_block_selection && (count > ROW_SIZE)) { // check for SrcA burst drop cases
+        // This logic is mildly simplified and conservative vs. exact (rather complex) silicon behavior
+        uint32_t start_row = dst_addr / ROW_SIZE;
+        if (in_element_size_bits == 2) {
+            throttle_mode = 0; // BFP2a/BFP2 always run at x1
+        } else if (tileize) {
+            throttle_mode = 2; // tileize always runs at x4, regardless of Throttle_mode
+#if TT_ARCH_VERSION == 1
+        } else if (!p_config->THCON_SEC0_REG1_ovrd_default_throttle_mode) {
+            throttle_mode = (in_element_size_bits == 8) ? 3 : 2; // 8-bit modes use x8, others use x4
+#endif
+        }
+        uint32_t throttle_bytes = 16u << throttle_mode;
+#if TT_ARCH_VERSION == 1
+        if ((throttle_mode == 2) && (in_element_size_bits >= 16)) {
+            throttle_bytes = 128; // upgrade to x4 "2x"
+        }
+#endif
+        uint32_t burst_rows = throttle_bytes / (2 * in_element_size_bits); // throughput / row_bytes
+        burst_rows = std::max(burst_rows, 1u);
+        burst_rows = std::min(burst_rows, 8u);
+        TTSIM_VERIFY(!(start_row & (burst_rows - 1)), UnsupportedFunctionality,
+            "src_a start_row=%d burst_rows=%d may span 16-row set boundary and drop writes", start_row, burst_rows);
+    }
+
     for (uint32_t i = 0; i < count; i++) {
         uint32_t sram_addr_bits = src_addr_bits + in_element_size_bits*(i % unpack_row_width) + row_stride*8*(i / unpack_row_width);
         uint32_t sram_addr = sram_addr_bits >> 3;
@@ -2603,6 +2644,8 @@ TENSIX_EXECUTE_UNPACR() {
             value = mem_rd<uint8_t>(&g_t_tiles[p_tensix->tile_id].sram[sram_addr]);
             if (in_element_size_bits == 4) {
                 value = (value >> (sram_addr_bits & 4)) & 15;
+            } else if (in_element_size_bits == 2) {
+                value = (value >> (sram_addr_bits & 6)) & 3;
             }
         }
         uint8_t exp_bits = 0;
@@ -2660,6 +2703,9 @@ TENSIX_EXECUTE_UNPACR() {
             } else if (in_data_format == 7) {
                 TTSIM_VERIFY(!unpack_to_dst, UnimplementedFunctionality, "unpack_to_dst=%d in_data_format=%d", unpack_to_dst, in_data_format);
                 value = uint32_t(bfp8_to_bf16(value << 4, exp_bits)) << 16; // bfp4 -> bfp8 -> bf16 -> fp32 in Src
+            } else if (in_data_format == 15) {
+                TTSIM_VERIFY(!unpack_to_dst, UnimplementedFunctionality, "unpack_to_dst=%d in_data_format=%d", unpack_to_dst, in_data_format);
+                value = uint32_t(bfp8_to_bf16(value << 6, exp_bits)) << 16; // bfp2 -> bfp8 -> bf16 -> fp32 in Src
             } else if (in_data_format == 8) {
                 TTSIM_VERIFY(unpack_to_dst, UndefinedBehavior, "unpack_to_dst=%d in_data_format=%d", unpack_to_dst, in_data_format);
                 value = dst_encode_fp32(value);
@@ -2698,7 +2744,11 @@ TENSIX_EXECUTE_UNPACR() {
             TTSIM_VERIFY(row < SRC_ROWS, UndefinedBehavior, "src_b row=%d", row);
             p_tensix->src_b[src_bank][row][col] = value;
         } else {
-            TTSIM_VERIFY(row < SRC_ROWS, UndefinedBehavior, "src_a row=%d", row);
+#if TT_ARCH_VERSION == 1
+            row &= SRC_ROWS-1;
+#else
+            TTSIM_VERIFY(row < SRC_ROWS, UnsupportedFunctionality, "src_a row=%d", row);
+#endif
             if (haloize) {
                 uint32_t row_low_bits = row & 15;
                 std::swap(row_low_bits, col);

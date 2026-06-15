@@ -149,6 +149,41 @@
       "base": "0xFFB98200",
       "limit": "0xFFB986FF",
       "name": "eth_txpkt_cfg"
+    },
+    {
+      "base": "0x10000000",
+      "limit": "0x1007FFFF",
+      "name": "arc_csm"
+    },
+    {
+      "base": "0x80000000",
+      "limit": "0x800FFFFF",
+      "name": "arc_apb"
+    },
+    {
+      "base": "0x30000",
+      "limit": "0x3FFFF",
+      "name": "arc_apb_reset_unit"
+    },
+    {
+      "base": "0x50000",
+      "limit": "0x50FFF",
+      "name": "arc_apb_niu0"
+    },
+    {
+      "base": "0x58000",
+      "limit": "0x58FFF",
+      "name": "arc_apb_niu1"
+    },
+    {
+      "base": "0xB0000",
+      "limit": "0xB0FFF",
+      "name": "arc_apb_msi_fifo"
+    },
+    {
+      "base": "0xF800000000000000",
+      "limit": "0xFBFFFFFFFFFFFFFF",
+      "name": "pcie_dbi"
     }
   ],
   "regs": [
@@ -262,6 +297,118 @@
       "name": "riscv_debug_regs",
       "regs": [
         {
+          "offset": "0x0",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_instrn_thread0",
+          "unsupported": true
+        },
+        {
+          "offset": "0x4",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_instrn_thread1",
+          "unsupported": true
+        },
+        {
+          "offset": "0x8",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_instrn_thread2",
+          "unsupported": true
+        },
+        {
+          "offset": "0xC",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_tdma_unpack0",
+          "unsupported": true
+        },
+        {
+          "offset": "0x10",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_tdma_unpack1",
+          "unsupported": true
+        },
+        {
+          "offset": "0x14",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_tdma_unpack2",
+          "unsupported": true
+        },
+        {
+          "offset": "0x18",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_fpu0",
+          "unsupported": true
+        },
+        {
+          "offset": "0x1C",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_fpu1",
+          "unsupported": true
+        },
+        {
+          "offset": "0x20",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_fpu2",
+          "unsupported": true
+        },
+        {
+          "offset": "0x30",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_l1_0",
+          "unsupported": true
+        },
+        {
+          "offset": "0x34",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_l1_1",
+          "unsupported": true
+        },
+        {
+          "offset": "0x38",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_l1_2",
+          "unsupported": true
+        },
+        {
+          "offset": "0x3C",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_all",
+          "unsupported": true
+        },
+        {
+          "offset": "0x48",
+          "rw": null,
+          "reset_value": null,
+          "name": "dbg_l1_mem_reg0",
+          "unsupported": true
+        },
+        {
+          "offset": "0x4C",
+          "rw": null,
+          "reset_value": null,
+          "name": "dbg_l1_mem_reg1",
+          "unsupported": true
+        },
+        {
+          "offset": "0x50",
+          "rw": null,
+          "reset_value": null,
+          "name": "dbg_l1_mem_reg2",
+          "unsupported": true
+        },
+        {
           "offset": "0x54",
           "rw": "wo",
           "reset_value": null,
@@ -280,10 +427,42 @@
           "name": "dbg_rd_data"
         },
         {
+          "offset": "0x60",
+          "rw": "wo",
+          "reset_value": null,
+          "name": "dbg_array_rd_en"
+        },
+        {
+          "offset": "0x64",
+          "rw": "wo",
+          "reset_value": null,
+          "name": "dbg_array_rd_cmd"
+        },
+        {
           "offset": "0x68",
           "rw": "rw",
           "reset_value": "0x00000000",
           "name": "dbg_feature_disable"
+        },
+        {
+          "offset": "0x6C",
+          "rw": "ro",
+          "reset_value": null,
+          "name": "dbg_array_rd_data"
+        },
+        {
+          "offset": "0x70",
+          "rw": null,
+          "reset_value": null,
+          "name": "cg_ctrl_hyst0",
+          "unsupported": true
+        },
+        {
+          "offset": "0x74",
+          "rw": null,
+          "reset_value": null,
+          "name": "cg_ctrl_hyst1",
+          "unsupported": true
         },
         {
           "offset": "0x78",
@@ -292,16 +471,240 @@
           "name": "tensix_creg_rddata"
         },
         {
+          "offset": "0x7C",
+          "rw": null,
+          "reset_value": null,
+          "name": "cg_ctrl_hyst2",
+          "unsupported": true
+        },
+        {
+          "offset": "0x80",
+          "rw": null,
+          "reset_value": null,
+          "name": "risc_dbg_cntl_0",
+          "unsupported": true
+        },
+        {
+          "offset": "0x84",
+          "rw": null,
+          "reset_value": null,
+          "name": "risc_dbg_cntl_1",
+          "unsupported": true
+        },
+        {
+          "offset": "0x88",
+          "rw": null,
+          "reset_value": null,
+          "name": "risc_dbg_status_0",
+          "unsupported": true
+        },
+        {
+          "offset": "0x8C",
+          "rw": null,
+          "reset_value": null,
+          "name": "risc_dbg_status_1",
+          "unsupported": true
+        },
+        {
+          "offset": "0x90",
+          "rw": null,
+          "reset_value": null,
+          "name": "trisc_pc_buf_override",
+          "unsupported": true
+        },
+        {
+          "offset": "0x94",
+          "rw": null,
+          "reset_value": null,
+          "name": "dbg_invalid_instrn",
+          "unsupported": true
+        },
+        {
+          "offset": "0xA0",
+          "rw": null,
+          "reset_value": null,
+          "name": "dbg_instrn_buf_ctrl0",
+          "unsupported": true
+        },
+        {
+          "offset": "0xA4",
+          "rw": null,
+          "reset_value": null,
+          "name": "dbg_instrn_buf_ctrl1",
+          "unsupported": true
+        },
+        {
           "offset": "0xA8",
           "rw": "ro",
           "reset_value": null,
           "name": "dbg_instrn_buf_status"
         },
         {
+          "offset": "0xAC",
+          "rw": null,
+          "reset_value": null,
+          "name": "stoch_rnd_mask0",
+          "unsupported": true
+        },
+        {
+          "offset": "0xB0",
+          "rw": null,
+          "reset_value": null,
+          "name": "stoch_rnd_mask1",
+          "unsupported": true
+        },
+        {
+          "offset": "0xB4",
+          "rw": null,
+          "reset_value": null,
+          "name": "fpu_sticky_bits",
+          "unsupported": true
+        },
+        {
+          "offset": "0xB8",
+          "rw": null,
+          "reset_value": null,
+          "name": "eth_risc_prefetch_ctrl",
+          "unsupported": true
+        },
+        {
+          "offset": "0xBC",
+          "rw": null,
+          "reset_value": null,
+          "name": "eth_risc_prefetch_pc",
+          "unsupported": true
+        },
+        {
+          "offset": "0xF0",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_tdma_pack0",
+          "unsupported": true
+        },
+        {
+          "offset": "0xF4",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_tdma_pack1",
+          "unsupported": true
+        },
+        {
+          "offset": "0xF8",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_tdma_pack2",
+          "unsupported": true
+        },
+        {
+          "offset": "0x100",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_out_l_instrn_thread",
+          "unsupported": true
+        },
+        {
+          "offset": "0x104",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_out_h_instrn_thread",
+          "unsupported": true
+        },
+        {
+          "offset": "0x108",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_out_l_tdma_unpack",
+          "unsupported": true
+        },
+        {
+          "offset": "0x10C",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_out_h_tdma_unpack",
+          "unsupported": true
+        },
+        {
+          "offset": "0x110",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_out_l_tdma_pack",
+          "unsupported": true
+        },
+        {
+          "offset": "0x114",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_out_h_tdma_pack",
+          "unsupported": true
+        },
+        {
+          "offset": "0x118",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_out_l_dbg_l1",
+          "unsupported": true
+        },
+        {
+          "offset": "0x11C",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_out_h_dbg_l1",
+          "unsupported": true
+        },
+        {
+          "offset": "0x120",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_out_l_fpu",
+          "unsupported": true
+        },
+        {
+          "offset": "0x124",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_out_h_fpu",
+          "unsupported": true
+        },
+        {
           "offset": "0x1B0",
           "rw": "rw",
           "reset_value": "0x00047800",
           "name": "soft_reset_0"
+        },
+        {
+          "offset": "0x1D0",
+          "rw": null,
+          "reset_value": null,
+          "name": "ecc_ctrl",
+          "unsupported": true
+        },
+        {
+          "offset": "0x1D4",
+          "rw": null,
+          "reset_value": null,
+          "name": "ecc_status",
+          "unsupported": true
+        },
+        {
+          "offset": "0x1E0",
+          "rw": null,
+          "reset_value": null,
+          "name": "watchdog_timer",
+          "unsupported": true
+        },
+        {
+          "offset": "0x1E4",
+          "rw": null,
+          "reset_value": null,
+          "name": "wdt_cntl",
+          "unsupported": true
+        },
+        {
+          "offset": "0x1E8",
+          "rw": null,
+          "reset_value": null,
+          "name": "wdt_status",
+          "unsupported": true
         },
         {
           "offset": "0x1F0",
@@ -320,6 +723,83 @@
           "rw": "ro",
           "reset_value": null,
           "name": "wall_clock_1_at"
+        },
+        {
+          "offset": "0x1FC",
+          "rw": null,
+          "reset_value": null,
+          "name": "timestamp_dump_cmd",
+          "unsupported": true
+        },
+        {
+          "offset": "0x200",
+          "rw": null,
+          "reset_value": null,
+          "name": "timestamp_dump_cntl",
+          "unsupported": true
+        },
+        {
+          "offset": "0x204",
+          "rw": null,
+          "reset_value": null,
+          "name": "timestamp_dump_status",
+          "unsupported": true
+        },
+        {
+          "offset": "0x208",
+          "rw": null,
+          "reset_value": null,
+          "name": "timestamp_dump_buf0_start_addr",
+          "unsupported": true
+        },
+        {
+          "offset": "0x20C",
+          "rw": null,
+          "reset_value": null,
+          "name": "timestamp_dump_buf0_end_addr",
+          "unsupported": true
+        },
+        {
+          "offset": "0x210",
+          "rw": null,
+          "reset_value": null,
+          "name": "timestamp_dump_buf1_start_addr",
+          "unsupported": true
+        },
+        {
+          "offset": "0x214",
+          "rw": null,
+          "reset_value": null,
+          "name": "timestamp_dump_buf1_end_addr",
+          "unsupported": true
+        },
+        {
+          "offset": "0x218",
+          "rw": null,
+          "reset_value": null,
+          "name": "perf_cnt_mux_ctrl",
+          "unsupported": true
+        },
+        {
+          "offset": "0x21C",
+          "rw": null,
+          "reset_value": null,
+          "name": "dbg_l1_readback_offset",
+          "unsupported": true
+        },
+        {
+          "offset": "0x220",
+          "rw": null,
+          "reset_value": null,
+          "name": "lfsr_hit_mask",
+          "unsupported": true
+        },
+        {
+          "offset": "0x224",
+          "rw": null,
+          "reset_value": null,
+          "name": "disable_reset",
+          "unsupported": true
         },
         {
           "offset": "0x228",
@@ -362,6 +842,20 @@
           "rw": "wo",
           "reset_value": null,
           "name": "dest_cg_ctrl"
+        },
+        {
+          "offset": "0x244",
+          "rw": null,
+          "reset_value": null,
+          "name": "cg_ctrl_en",
+          "unsupported": true
+        },
+        {
+          "offset": "0x248",
+          "rw": null,
+          "reset_value": null,
+          "name": "cg_kick",
+          "unsupported": true
         }
       ]
     },
@@ -764,6 +1258,44 @@
           "rw": "wo",
           "reset_value": null,
           "name": "mac_da_hi"
+        }
+      ]
+    },
+    {
+      "name": "dbi",
+      "regs": [
+        {
+          "offset": "0x78",
+          "rw": "rw",
+          "reset_value": null,
+          "name": "device_control_device_status"
+        }
+      ]
+    },
+    {
+      "name": "reset_unit",
+      "regs": [
+        {
+          "offset": "0x60",
+          "rw": "rw",
+          "reset_value": "0x00000000",
+          "name": "scratch",
+          "array_size": 8,
+          "array_stride": "0x4"
+        },
+        {
+          "offset": "0x100",
+          "rw": "rw",
+          "reset_value": "0x00000000",
+          "name": "arc_misc_cntl"
+        },
+        {
+          "offset": "0x400",
+          "rw": "rw",
+          "reset_value": "0x00000000",
+          "name": "scratch_ram",
+          "array_size": 16,
+          "array_stride": "0x4"
         }
       ]
     }
