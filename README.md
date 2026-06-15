@@ -96,6 +96,35 @@ cd $TT_METAL_HOME
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_legacy --gtest_filter=QuasarMeshDeviceSingleCardFixture.SingleDmL1Write
 ```
 
+## Running ttsim as a QEMU PCI Device
+[ttsim-qemu](https://github.com/tenstorrent/ttsim-qemu) adds a `ttsim` PCI device to `qemu-system-*`
+that exposes `libttsim.so` to a guest VM over PCIe, letting [tt-kmd](https://github.com/tenstorrent/tt-kmd)
+bind to it and surface `/dev/tenstorrent/0` inside the guest.
+
+Build:
+```bash
+git clone git@github.com:tenstorrent/ttsim-qemu.git
+cd ttsim-qemu
+./configure --target-list=x86_64-softmmu && make -j$(nproc)
+```
+
+Run, with the appropriate `bar4-size` for the chip (Wormhole: `32M`, Blackhole: `32G`):
+```bash
+qemu-system-x86_64 ... \
+    -device ttsim,lib=/path/to/libttsim.so,bar4-size=32M
+```
+
+Inside the guest, build and load `tt-kmd` to surface `/dev/tenstorrent/0`:
+```bash
+sudo apt install -y build-essential linux-headers-generic git
+git clone https://github.com/tenstorrent/tt-kmd && cd tt-kmd && make
+sudo insmod tenstorrent.ko
+```
+
+`qemu-system-aarch64` is also supported and will be faster on ARM-based host platforms.
+
+Quasar's host MMIO path is not implemented in libttsim and will not work end-to-end.
+
 ## Known Issues
 **Fast dispatch is not sufficiently tested**. It is believed to be fully functional, but run-to-run
 determinism has not been adequately characterized, and simulations may take longer to run than under
