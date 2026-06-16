@@ -1857,7 +1857,6 @@ static inline uint32_t denormals_as_zeros(uint32_t u) {
     return u;
 }
 
-// XXX Probably bit accurate on WH, but have not validated on BH yet
 static uint32_t pack_l1_acc_fp32(uint32_t dst, uint32_t src) {
     dst = denormals_as_zeros(dst);
     src = denormals_as_zeros(src);
@@ -1868,7 +1867,6 @@ static uint32_t pack_l1_acc_fp32(uint32_t dst, uint32_t src) {
     return denormals_as_zeros(ret);
 }
 
-// XXX Bit accurate on WH, but have not validated on BH yet
 static uint16_t pack_l1_acc_bf16(uint16_t dst, uint16_t src) {
     if (((dst == 0x7F80) && (src == 0xFF80)) || ((dst == 0xFF80) && (src == 0x7F80))) { // +inf + -inf or vice versa
         return 0x7FC0; // canonical NaN
@@ -1981,12 +1979,44 @@ TENSIX_EXECUTE_PACR() {
     TTSIM_VERIFY(p_config->PACK_COUNTERS_SEC2_pack_reads_per_xy_plane == pack_reads_per_xy_plane, UnsupportedFunctionality, "pack_reads_per_xy_plane inconsistent");
     TTSIM_VERIFY(p_config->PACK_COUNTERS_SEC3_pack_reads_per_xy_plane == pack_reads_per_xy_plane, UnsupportedFunctionality, "pack_reads_per_xy_plane inconsistent");
 #endif
-    TTSIM_VERIFY(!p_config->THCON_SEC0_REG1_Source_interface_selection, UnsupportedFunctionality, "packer source from L1");
+    TTSIM_VERIFY(!p_tensix->DEST_TARGET_REG_CFG_PACK_SEC0_ZOffset, UnsupportedFunctionality, "ZOffset");
 #if TT_ARCH_VERSION == 0
-    TTSIM_VERIFY(!p_config->THCON_SEC0_REG8_Source_interface_selection, UnsupportedFunctionality, "packer source from L1");
-    TTSIM_VERIFY(!p_config->THCON_SEC1_REG1_Source_interface_selection, UnsupportedFunctionality, "packer source from L1");
-    TTSIM_VERIFY(!p_config->THCON_SEC1_REG8_Source_interface_selection, UnsupportedFunctionality, "packer source from L1");
+    TTSIM_VERIFY(!p_tensix->DEST_TARGET_REG_CFG_PACK_SEC1_ZOffset, UnsupportedFunctionality, "ZOffset");
+    TTSIM_VERIFY(!p_tensix->DEST_TARGET_REG_CFG_PACK_SEC2_ZOffset, UnsupportedFunctionality, "ZOffset");
+    TTSIM_VERIFY(!p_tensix->DEST_TARGET_REG_CFG_PACK_SEC3_ZOffset, UnsupportedFunctionality, "ZOffset");
 #endif
+
+#if TT_ARCH_VERSION == 0
+#define PACK_VERIFY_THCON0(f) \
+    TTSIM_VERIFY(!p_config->THCON_SEC0_REG1_##f && !p_config->THCON_SEC0_REG8_##f && \
+                 !p_config->THCON_SEC1_REG1_##f && !p_config->THCON_SEC1_REG8_##f, \
+        UnsupportedFunctionality, #f)
+#else
+#define PACK_VERIFY_THCON0(f) \
+    TTSIM_VERIFY(!p_config->THCON_SEC0_REG1_##f, UnsupportedFunctionality, #f)
+#endif
+    PACK_VERIFY_THCON0(Row_start_section_size);
+    PACK_VERIFY_THCON0(Dis_shared_exp_assembler);
+    PACK_VERIFY_THCON0(Enable_out_fifo);
+    PACK_VERIFY_THCON0(Add_l1_dest_addr_offset);
+    PACK_VERIFY_THCON0(Sub_l1_tile_header_size);
+    PACK_VERIFY_THCON0(Source_interface_selection);
+    PACK_VERIFY_THCON0(Exp_threshold_en);
+#if TT_ARCH_VERSION == 1
+    PACK_VERIFY_THCON0(Add_tile_header_size);
+#endif
+    PACK_VERIFY_THCON0(Downsample_mask);
+    PACK_VERIFY_THCON0(Downsample_rate);
+#if TT_ARCH_VERSION == 0
+    PACK_VERIFY_THCON0(Force_pack_per_max_xy_plane);
+    PACK_VERIFY_THCON0(Addr_cnt_context);
+    PACK_VERIFY_THCON0(Read_mode);
+#else
+    PACK_VERIFY_THCON0(Pac_LF8_4b_exp);
+    PACK_VERIFY_THCON0(Auto_set_last_pacr_intf_sel);
+    PACK_VERIFY_THCON0(pack_start_intf_pos);
+#endif
+#undef PACK_VERIFY_THCON0
 
     uint32_t intermediate_format = p_config->ALU_FORMAT_SPEC_REG2_Dstacc;
     uint32_t pack_src_format = p_config->THCON_SEC0_REG1_In_data_format;
@@ -2009,9 +2039,17 @@ TENSIX_EXECUTE_PACR() {
                  (pack_fmt_conv_mode == 0x67) || // bfp8 src, bfp4 dst
                  (pack_fmt_conv_mode == 0x99) ||
                  (pack_fmt_conv_mode == 0x100) || (pack_fmt_conv_mode == 0x101) || (pack_fmt_conv_mode == 0x106) || (pack_fmt_conv_mode == 0x107) ||
+                 ((pack_fmt_conv_mode == 0x111) && (TT_ARCH_VERSION == 1)) || // bh only fp32 src, fp16 dst
                  (pack_fmt_conv_mode == 0x155) || (pack_fmt_conv_mode == 0x166) || (pack_fmt_conv_mode == 0x167) ||
                  (pack_fmt_conv_mode == 0x188) || (pack_fmt_conv_mode == 0x199) || (pack_fmt_conv_mode == 0x1EE),
         UnimplementedFunctionality, "pack_fmt_conv_mode=0x%x", pack_fmt_conv_mode);
+    if (pack_fmt_conv_mode == 0x111) {
+        TTSIM_VERIFY(p_config->PCK_DEST_RD_CTRL_Round_10b_mant, UnsupportedFunctionality,
+            "pack_fmt_conv_mode=0x%x round_10b_mant=%d", pack_fmt_conv_mode, p_config->PCK_DEST_RD_CTRL_Round_10b_mant);
+    } else {
+        TTSIM_VERIFY(!p_config->PCK_DEST_RD_CTRL_Round_10b_mant, UnimplementedFunctionality,
+            "pack_fmt_conv_mode=0x%x round_10b_mant=%d", pack_fmt_conv_mode, p_config->PCK_DEST_RD_CTRL_Round_10b_mant);
+    }
     uint32_t src_element_size_bits = get_element_size(pack_src_format);
     uint32_t dst_element_size_bits = get_element_size(pack_dst_format);
     uint32_t src_element_align = (src_element_size_bits + 7) / 8; // no alignment needed for 2/4-bit formats
@@ -2032,12 +2070,6 @@ TENSIX_EXECUTE_PACR() {
                          p_addr_ctrl->ch0_w * ch0_w_stride) / src_element_align;
     TTSIM_VERIFY(!(src_addr % ROW_SIZE), UnimplementedFunctionality, "misaligned src_addr=%d", src_addr);
 
-    TTSIM_VERIFY(!p_config->THCON_SEC0_REG1_Sub_l1_tile_header_size, UnsupportedFunctionality, "Sub_l1_tile_header_size must be 0");
-#if TT_ARCH_VERSION == 0
-    TTSIM_VERIFY(!p_config->THCON_SEC0_REG8_Sub_l1_tile_header_size, UnsupportedFunctionality, "Sub_l1_tile_header_size must be 0");
-    TTSIM_VERIFY(!p_config->THCON_SEC1_REG1_Sub_l1_tile_header_size, UnsupportedFunctionality, "Sub_l1_tile_header_size must be 0");
-    TTSIM_VERIFY(!p_config->THCON_SEC1_REG8_Sub_l1_tile_header_size, UnsupportedFunctionality, "Sub_l1_tile_header_size must be 0");
-#endif
     uint32_t packer_addrs[4] = {
         p_config->THCON_SEC0_REG1_L1_Dest_addr + 1,
 #if TT_ARCH_VERSION == 0
@@ -2052,12 +2084,6 @@ TENSIX_EXECUTE_PACR() {
             packer_addrs[i] += packer_addrs[0];
         }
     }
-#endif
-    TTSIM_VERIFY(!p_config->THCON_SEC0_REG1_Add_l1_dest_addr_offset, UnsupportedFunctionality, "Add_l1_dest_addr_offset");
-#if TT_ARCH_VERSION == 0
-    TTSIM_VERIFY(!p_config->THCON_SEC0_REG8_Add_l1_dest_addr_offset, UnsupportedFunctionality, "Add_l1_dest_addr_offset");
-    TTSIM_VERIFY(!p_config->THCON_SEC1_REG1_Add_l1_dest_addr_offset, UnsupportedFunctionality, "Add_l1_dest_addr_offset");
-    TTSIM_VERIFY(!p_config->THCON_SEC1_REG8_Add_l1_dest_addr_offset, UnsupportedFunctionality, "Add_l1_dest_addr_offset");
 #endif
     bool pack_l1_acc = p_config->THCON_SEC0_REG1_Pack_L1_Acc;
     if (pack_l1_acc) {
@@ -2089,9 +2115,9 @@ TENSIX_EXECUTE_PACR() {
 #endif
 
     for (uint32_t packer = 0; packer < n_packers; packer++) {
-        uint32_t tpg_x = 0; // XXX Do these carry over across PACR instructions, or are they reset each time? Docs are unclear
-        uint32_t tpg_y = 0;
-        [[maybe_unused]] uint32_t tpg_z = 0; // this will likely be used in the future
+        uint32_t tpg_x = p_tensix->packer_valid ? p_tensix->packer_tpg_x[packer] : 0;
+        uint32_t tpg_y = p_tensix->packer_valid ? p_tensix->packer_tpg_y[packer] : 0;
+        [[maybe_unused]] uint32_t tpg_z = p_tensix->packer_valid ? p_tensix->packer_tpg_z[packer] : 0;
         uint32_t edge_mask_b = (p_config->PCK_EDGE_TILE_ROW_SET_SELECT_select >> (2 * packer)) & 3;
         TTSIM_VERIFY(edge_mask_b <= 1, UnimplementedFunctionality, "edge_mask_b=%d", edge_mask_b);
         uint32_t pack_row = src_addr / ROW_SIZE;
@@ -2106,7 +2132,7 @@ TENSIX_EXECUTE_PACR() {
         }
         pack_row &= DST_ROWS-1;
         TTSIM_VERIFY(pack_row + ((count + ROW_SIZE-1) / ROW_SIZE) <= DST_ROWS, UnimplementedFunctionality, "pack_row=%d count=%d", pack_row, count);
-        if (!p_tensix->packer_dst_addr_valid) {
+        if (!p_tensix->packer_valid) {
             uint32_t addr = packer_addrs[packer];
             TTSIM_VERIFY(!p_addr_ctrl->ch1_z, UnimplementedFunctionality, "ch1_z=%d", p_addr_ctrl->ch1_z);
             TTSIM_VERIFY(!p_addr_ctrl->ch1_w, UnimplementedFunctionality, "ch1_w=%d", p_addr_ctrl->ch1_w);
@@ -2185,13 +2211,14 @@ TENSIX_EXECUTE_PACR() {
                             TTSIM_VERIFY(!read_raw, UnimplementedFunctionality, "fp32 to bf16/bfp8: read_raw=%d", read_raw);
                             if ((value & 0x7FFFFFFF) > 0x7F800000) {
                                 value = (value & 0x80000000) | 0x7F800000;
-                            } else if ((value & 0x7FFFFFFF) < 0x800000) {
-                                value = 0;
                             }
                             if (intermediate_format == 5) {
                                 value = (value + 0x8000) >> 16;
                             } else {
                                 value = ((value >> 16) + 1) & ~1; // reduce to m6 instead of m7
+                            }
+                            if ((value & 0x7FFF) < 0x80) {
+                                value = 0;
                             }
                         } else if (intermediate_format == 14) {
                             TTSIM_VERIFY(!read_raw, UnimplementedFunctionality, "int32 to int8: read_raw=%d", read_raw);
@@ -2204,6 +2231,17 @@ TENSIX_EXECUTE_PACR() {
                             } else { // preserve sign bit, clamp magnitude to 127
                                 value = ((value & 0x80000000) >> 24) | std::min(value & 0x7FFFFFFFu, 127u);
                             }
+#if TT_ARCH_VERSION == 1
+                        } else if (intermediate_format == 1) {
+                            TTSIM_ERROR(UntestedFunctionality, "fp32 to fp16 intermediate_format=1");
+                            if ((value & 0x7FFFFFFF) > 0x7F800000) {
+                                value = (value & 0x80000000) | 0x7F800000;
+                            }
+                            value = (value + 0x1000) >> 13; // round to TF32
+                            if ((value & 0x3FFFF) < 0x400) {
+                                value = 0;
+                            }
+#endif
                         } else if ((intermediate_format != 0) && (intermediate_format != 8)) {
                             TTSIM_ERROR(UnimplementedFunctionality, "dst32b intermediate_format=%d", intermediate_format);
                         }
@@ -2248,6 +2286,21 @@ TENSIX_EXECUTE_PACR() {
                         value = p_config->STACC_RELU_ReluThreshold;
                     }
                 }
+#if TT_ARCH_VERSION == 1
+                if ((p_config->PCK_DEST_RD_CTRL_Read_32b_data == 1) && (intermediate_format == 1)) {
+                    TTSIM_ERROR(UntestedFunctionality, "fp32 to fp16 intermediate_format=1");
+                    uint32_t s = value >> 18;
+                    int32_t e = int32_t((value >> 10) & 255) - 112;
+                    uint32_t m = value & 0x3FF;
+                    if (e < 0) {
+                        value = s << 15;
+                    } else if (e > 31) {
+                        value = (s << 15) | 0x7FFF;
+                    } else {
+                        value = (s << 15) | (e << 10) | m;
+                    }
+                }
+#endif
                 if ((intermediate_format == 1) && (pack_dst_format == 0)) { // fp16 -> fp32 late conversion
                     if (value & 0x7C00) { // nonzero exponent: rebias from 5-bit to 8-bit
                         value = ((value & 0x8000) << 16) | (((value & 0x7FFF) + (112 << 10)) << 13);
@@ -2345,8 +2398,11 @@ TENSIX_EXECUTE_PACR() {
         }
         p_tensix->packer_dst_addr[packer] = dst_addr + (dst_element_size_bits * count) / 8;
         p_tensix->packer_dst_exp_addr[packer] = dst_exp_addr + count/16;
+        p_tensix->packer_tpg_x[packer] = tpg_x;
+        p_tensix->packer_tpg_y[packer] = tpg_y;
+        p_tensix->packer_tpg_z[packer] = tpg_z;
     }
-    p_tensix->packer_dst_addr_valid = !last && !flush;
+    p_tensix->packer_valid = !last && !flush;
 
     uint32_t y0_incr, y0_cr, y0_clear;
     uint32_t y1_incr, y1_cr, y1_clear;

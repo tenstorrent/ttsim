@@ -184,6 +184,11 @@
       "base": "0xF800000000000000",
       "limit": "0xFBFFFFFFFFFFFFFF",
       "name": "pcie_dbi"
+    },
+    {
+      "base": "0xFFFFFFFFFF000000",
+      "limit": "0xFFFFFFFFFFFFFFFF",
+      "name": "pcie_niu"
     }
   ],
   "regs": [

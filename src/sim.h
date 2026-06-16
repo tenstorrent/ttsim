@@ -1,95 +1,12 @@
 // SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Central simulator header: shared types, global state, and the TTSimErrorCategory contract.
+// Central simulator header: shared types, global state, and interfaces between modules.
 #pragma once
-#include <stddef.h>
-#include <stdio.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include <bit>
-#include <iterator>
+#include "common.h"
 #include "config.h"
 #include "tensix_regs.h" // generated
 #include "tile_regs.h" // generated
-
-enum class TTSimErrorCategory {
-    UndefinedBehavior, // as defined in tt-isa-documentation
-    UnpredictableValueUsed, // as defined in tt-isa-documentation
-    NonContractualBehavior, // as defined in tt-isa-documentation
-    AssertionFailure, // internal bug in simulator
-    MissingSpecification, // tt-isa-documentation missing or inadequate to implement feature
-    UntestedFunctionality, // implemented, but inadequate test coverage to enable yet
-    UnimplementedFunctionality, // not implemented yet
-    UnsupportedFunctionality, // planned to never be implemented
-    SystemError, // OS errors and similar
-    ConfigurationError, // bad command line options, env vars, configuration files, etc.
-};
-
-#define TTSIM_ERROR(category, fmt, ...) \
-    ttsim_error(TTSimErrorCategory::category, __func__, fmt "\n", ##__VA_ARGS__)
-
-#define TTSIM_ERROR_NOFMT(category) \
-    ttsim_error(TTSimErrorCategory::category, __func__, nullptr)
-
-#define TTSIM_VERIFY(cond, category, fmt, ...) \
-    do { \
-        if (!(cond)) [[unlikely]] { \
-            ttsim_error(TTSimErrorCategory::category, __func__, fmt "\n", ##__VA_ARGS__); \
-        } \
-    } while (0)
-
-// Use ASSERT instead of VERIFY only in cases where a sufficiently smart compiler could
-// prove that the condition will never be violated.
-#if defined(DEBUG)
-#define TTSIM_ASSERT(cond) \
-    do { \
-        if (!(cond)) [[unlikely]] { \
-            ttsim_error(TTSimErrorCategory::AssertionFailure, __func__, "%s\n", #cond); \
-        } \
-    } while (0)
-#else
-#define TTSIM_ASSERT(cond) do {} while (0)
-#endif
-
-// Bitfield extracts analogous to Verilog x[hi:lo] notation
-// Avoiding actual "class T" template arg to optimize compile times
-template<uint32_t hi, uint32_t lo>
-[[nodiscard]] constexpr uint32_t bits(uint32_t x) {
-    static_assert((lo <= hi) && (hi < 32));
-    return ((x >> lo) & ((2u << (hi - lo)) - 1u));
-}
-template<uint32_t hi, uint32_t lo>
-[[nodiscard]] constexpr uint64_t bits(uint64_t x) {
-    static_assert((lo <= hi) && (hi < 64));
-    return ((x >> lo) & ((2ull << (hi - lo)) - 1ull));
-}
-template<uint32_t hi, uint32_t lo>
-[[nodiscard]] constexpr int32_t signed_bits(uint32_t x) {
-    static_assert((lo <= hi) && (hi < 32));
-    return (int32_t(x << (31 - hi)) >> (31 - hi + lo));
-}
-template<uint32_t hi, uint32_t lo>
-[[nodiscard]] constexpr int64_t signed_bits(uint64_t x) {
-    static_assert((lo <= hi) && (hi < 64));
-    return (int64_t(x << (63 - hi)) >> (63 - hi + lo));
-}
-
-template<int N> struct int_types;
-template<> struct int_types<32> { using int_t = int32_t; using uint_t = uint32_t; };
-template<> struct int_types<64> { using int_t = int64_t; using uint_t = uint64_t; };
-template<> struct int_types<128> { using int_t = __int128; using uint_t = unsigned __int128; };
-
-// Wrappers to provide value semantics without UB (similar to read/write_unaligned in Rust)
-template<class T> [[nodiscard]] T mem_rd(const void *p) {
-    T data;
-    memcpy(&data, p, sizeof(data));
-    return data;
-}
-template<class T> void mem_wr(void *p, T data) {
-    memcpy(p, &data, sizeof(data));
-}
 
 struct Rv32HartState {
     char tile_type;
@@ -402,9 +319,12 @@ struct TensixState {
     // Tensix cfg registers
     TensixThreadState thread[TENSIX_INST_PIPES];
     TensixAddrCtrl addr_ctrl[TENSIX_INST_PIPES][3]; // [pipe][unpack0, unpack1, pack]
+    bool packer_valid; // for carried state (below) across PACRs within a tile
+    uint32_t packer_tpg_x[4];
+    uint32_t packer_tpg_y[4];
+    uint32_t packer_tpg_z[4];
     uint32_t packer_dst_addr[4];
     uint32_t packer_dst_exp_addr[4];
-    bool packer_dst_addr_valid;
     TensixConfigState config[2];
 #if TT_ARCH_VERSION == 0
     CFG152_REG_UNION()
@@ -566,17 +486,22 @@ struct ArcTile {
 #endif
 };
 
-#if TT_ARCH_VERSION == 0
+#define IATU_REGION_ENABLE (1ull << 31)
 struct IatuRegion {
     uint32_t ctrl_1;
     uint32_t ctrl_2;
     uint32_t lower_base;
     uint32_t upper_base;
-    uint32_t limit;
+    uint32_t lower_limit;
     uint32_t lower_target;
     uint32_t upper_target;
+#if TT_ARCH_VERSION == 1
+    uint32_t ctrl_3;
+    uint32_t upper_limit;
+#endif
 };
 
+#if TT_ARCH_VERSION == 0
 struct DmaEngine {
     uint32_t write_engine_en;
     uint32_t write_doorbell;
@@ -614,10 +539,10 @@ uint32_t pcie_niu_rd32(uint32_t noc_instance, uint32_t offset);
 #endif
 
 struct PcieTile {
-#if TT_ARCH_VERSION == 0
-    uint64_t tlb_cfg[186];
     IatuRegion iatu_outbound[16];
     IatuRegion iatu_inbound[16];
+#if TT_ARCH_VERSION == 0
+    uint64_t tlb_cfg[186];
     DmaEngine dma;
 #elif TT_ARCH_VERSION == 1
     uint32_t tlb_cfg[210*3];
@@ -672,8 +597,6 @@ void libttsim_pci_dma_mem_rd_bytes(uint64_t paddr, void *p, uint32_t size);
 void libttsim_pci_dma_mem_wr_bytes(uint64_t paddr, const void *p, uint32_t size);
 uint64_t libttsim_syscall(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_t syscall, uint64_t arg0, uint64_t arg1, uint64_t arg2);
 
-void ttsim_printf(const char *fmt, ...);
-[[noreturn, gnu::cold]] void ttsim_error(TTSimErrorCategory category, const char *func, const char *fmt, ...);
 void ttsim_init();
 void ttsim_exit();
 void ttsim_select_chip(uint32_t chip_id);

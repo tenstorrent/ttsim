@@ -240,19 +240,26 @@ void e_tile_init(uint32_t tile_id) {
     p_tile->eth_txq_txpkt_cfg_sel_sw[1] = 0x111;
     p_tile->eth_txq_txpkt_cfg_sel_hw[0] = 0;
     p_tile->eth_txq_txpkt_cfg_sel_hw[1] = 1;
-#if NUM_CHIPS > 1
     // Fake the eth base-FW boot_results that the active-erisc app (and UMD) read to confirm a
-    // trained, connected link -- the base FW that writes these after link training is faked out.
-    // Only tiles with an inter-chip peer advertise a link; others stay not-connected. Offsets per
-    // tt-metal blackhole eth_fw_api.h boot_results_t at MEM_SYSENG_BOOT_RESULTS_BASE 0x7CC00
-    // (eth_status @ 0, eth_live_status @ 512).
+    // link state -- the base FW that writes these after link training is faked out. A tile with
+    // an inter-chip peer advertises a trained, connected link; every other tile reports the link
+    // down. UMD polls port_status until it leaves PORT_UNKNOWN, so an unpeered tile must still
+    // report a terminal PORT_DOWN. Offsets per tt-metal blackhole eth_fw_api.h boot_results_t at
+    // MEM_SYSENG_BOOT_RESULTS_BASE 0x7CC00 (eth_status @ 0, eth_live_status @ 512).
+#if NUM_CHIPS > 1
     uint32_t bh_remote_chip = 0, bh_remote_eth = 0;
     if (eth_peer(tile_id, &bh_remote_chip, &bh_remote_eth)) {
         mem_wr<uint32_t>(&p_tile->sram[0x7CC04], 1); // eth_status.port_status = PORT_UP
         mem_wr<uint32_t>(&p_tile->sram[0x7CC08], 2); // eth_status.train_status = LINK_TRAIN_PASS
         mem_wr<uint32_t>(&p_tile->sram[0x7CE04], 1); // eth_live_status.rx_link_up = 1
-    }
+    } else
 #endif
+    {
+        mem_wr<uint32_t>(&p_tile->sram[0x7CC04], 2); // eth_status.port_status = PORT_DOWN (no link)
+    }
+    // eth_status.postcode reports how far the base FW's eth_init() got; tt-metal waits for a terminal
+    // value (PASS/FAIL/SKIP) on every idle eth core before resetting it. Init completes -> PASS.
+    mem_wr<uint32_t>(&p_tile->sram[0x7CC00], 0xC0DEA000); // eth_status.postcode = POSTCODE_ETH_INIT_PASS
 #endif
 }
 
@@ -272,6 +279,12 @@ void e_tile_init(uint32_t tile_id) {
 #define WH_X2_MANGLED_BOARD_ID 0x618320AE
 #elif TT_ARCH_VERSION == 1
 #define FLASH_BUNDLE_VERSION 0x12050000 // v18.5
+#define ARC_MSG_QCB_CSM_OFFSET 0x300
+#define ARC_MSG_QUEUE_CSM_OFFSET 0x400
+#define ARC_MSG_NUM_QUEUES 4
+#define ARC_MSG_QUEUE_NUM_ENTRIES 8
+#define ARC_MSG_QUEUE_HEADER_SIZE 32
+#define ARC_MSG_ENTRY_SIZE 32
 #if NUM_CHIPS == 1
 #define BOARD_ID_HIGH 0x400 // P150
 #else
@@ -492,8 +505,11 @@ void a_tile_init() {
 #elif TT_ARCH_VERSION == 1
     g_a_tile.scratch_ram[13] = ARC_CSM_BASE + ARC_TELEMETRY_TABLE_CSM_OFFSET;
     g_a_tile.scratch_ram[12] = ARC_CSM_BASE + ARC_TELEMETRY_VALUES_CSM_OFFSET;
-    g_a_tile.scratch_ram[2] = 1;  // ARC_BOOT_STATUS: bit 0 = ready to receive messages
-    g_a_tile.scratch_ram[11] = 0; // message-queue control block ptr: 0 = queue not modeled
+    g_a_tile.scratch_ram[2] = 0x5;  // ARC_BOOT_STATUS: bit 2 = ARC core started. bit 0 = ready to receive messages
+    mem_wr<uint32_t>(&g_a_tile.csm[ARC_MSG_QCB_CSM_OFFSET + 0], ARC_CSM_BASE + ARC_MSG_QUEUE_CSM_OFFSET);
+    // QCB word 1: entries-per-queue in byte 0, queue count in byte 1
+    mem_wr<uint32_t>(&g_a_tile.csm[ARC_MSG_QCB_CSM_OFFSET + 4], ARC_MSG_QUEUE_NUM_ENTRIES | (ARC_MSG_NUM_QUEUES << 8));
+    g_a_tile.scratch_ram[11] = ARC_CSM_BASE + ARC_MSG_QCB_CSM_OFFSET; // message-queue control block ptr
 #endif
 
     // Not static: the table captures g_current_chip_id (ASIC_ID / ASIC_LOCATION below), so
@@ -509,6 +525,13 @@ void a_tile_init() {
         {14, 1000},                     // AICLK (MHz)
         {28, FLASH_BUNDLE_VERSION},
         {52, g_current_chip_id},        // ASIC_LOCATION
+#if TT_ARCH_VERSION == 1
+        {38, 0x1},                      // PCIE_USAGE: PCIe 0 endpoint, PCIe 1 harvested (the sim only
+                                        // models PCIe 0 at (2,0)) -> pcie_harvesting_mask 0x2 (P150)
+        {35, 0x3FFC},                   // ENABLED_ETH: eth cores 0,1 harvested
+        {61, 0x0},                      // ASIC_ID_HIGH
+        {62, 1 + g_current_chip_id},    // ASIC_ID_LOW
+#endif
     };
     constexpr uint32_t n = std::size(telem);
     mem_wr<uint32_t>(&g_a_tile.csm[ARC_TELEMETRY_TABLE_CSM_OFFSET + 0], 1); // version
@@ -780,7 +803,6 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
             }
             TTSIM_ERROR(UnsupportedFunctionality, "DBG_FEATURE_DISABLE in eth tile");
         case RISCV_DEBUG_REGS_TENSIX_CREG_RDDATA:
-            TTSIM_ERROR(UntestedFunctionality, "TENSIX_CREG_RDDATA");
             if constexpr (tile_type == 'T') {
                 return p_tile->tensix_creg_rddata;
             }
@@ -806,7 +828,6 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
     switch (offset) {
         case RISCV_DEBUG_REGS_DBG_BUS_CTRL: TTSIM_ERROR(UnimplementedFunctionality, "DBG_BUS_CTRL");
         case RISCV_DEBUG_REGS_TENSIX_CREG_READ:
-            TTSIM_ERROR(UntestedFunctionality, "TENSIX_CREG_READ");
             TTSIM_VERIFY(data < TENSIX_CFG_STATE_SIZE*4, UnimplementedFunctionality,
                 "TENSIX_CREG_READ: data=0x%x", data);
             p_tile->tensix_creg_rddata = tensix_cfg_rd32(&p_tile->tensix[0], 0, 4*data);
@@ -2145,17 +2166,26 @@ bool tile_mmio_wr64(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_
 static uint64_t translate_pci_dma_addr(uint64_t addr, uint32_t size) {
 #if TT_ARCH_VERSION == 0
     constexpr uint64_t WINDOW_BASE = 0x800000000ull;
-    TTSIM_VERIFY((addr >= WINDOW_BASE) && (addr + size <= 0x8FFFE0000ull),
-        UnimplementedFunctionality, "addr=0x%llx size=%d", addr, size);
+    constexpr uint64_t WINDOW_SIZE = 0xFFFE0000ull;
+#else
+    constexpr uint64_t WINDOW_BASE = 1ull << 60;
+    constexpr uint64_t WINDOW_SIZE = 1ull << 58;
+#endif
     TTSIM_VERIFY(size, UndefinedBehavior, "size=%d", size);
+    TTSIM_VERIFY(addr >= WINDOW_BASE, UnimplementedFunctionality, "addr=0x%llx size=%d", addr, size);
     uint64_t offset = addr - WINDOW_BASE;
+    TTSIM_VERIFY(offset + size <= WINDOW_SIZE, UnimplementedFunctionality, "addr=0x%llx size=%d", addr, size);
     for (size_t i = 0; i < 16; i++) {
         const IatuRegion &r = g_p_tile.iatu_outbound[i];
-        if (!(r.ctrl_2 & (1u << 31))) { // IATU_REGION_EN
+        if (!(r.ctrl_2 & IATU_REGION_ENABLE)) {
             continue;
         }
         uint64_t base = (uint64_t(r.upper_base) << 32) | r.lower_base;
-        uint64_t limit = (uint64_t(r.upper_base) << 32) | r.limit;
+#if TT_ARCH_VERSION == 0
+        uint64_t limit = (uint64_t(r.upper_base) << 32) | r.lower_limit;
+#else
+        uint64_t limit = (uint64_t(r.upper_limit) << 32) | r.lower_limit;
+#endif
         if ((offset >= base) && (offset + size - 1 <= limit)) {
             uint64_t target = (uint64_t(r.upper_target) << 32) | r.lower_target;
             return target + (offset - base);
@@ -2163,16 +2193,6 @@ static uint64_t translate_pci_dma_addr(uint64_t addr, uint32_t size) {
     }
     // identity mapping for offsets outside any configured region
     return offset;
-#elif TT_ARCH_VERSION == 1
-    // https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/PCIExpressTile/README.md#noc-to-host-264-bytes
-    constexpr uint64_t WINDOW_BASE = 1ull << 60;
-    constexpr uint64_t WINDOW_SIZE = 1ull << 58;
-    TTSIM_VERIFY((addr >= WINDOW_BASE) && (addr + size <= WINDOW_BASE + WINDOW_SIZE),
-        UnimplementedFunctionality, "addr=0x%llx size=%d", addr, size);
-    return addr - WINDOW_BASE;
-#else
-    TTSIM_ERROR_NOFMT(MissingSpecification);
-#endif
 }
 
 #define ARC_MISC_CNTL_IRQ0 (1u << 16)
@@ -2207,40 +2227,103 @@ static uint32_t arc_reset_unit_rd32(uint32_t offset) {
     }
 }
 
+static void arc_service_message(uint8_t code, uint32_t *resp) {
 #if TT_ARCH_VERSION == 0
-static void arc_service_message() {
-    uint8_t code = g_a_tile.reset_unit_scratch[5] & 0xff;
     uint32_t exit_code = 0;
+#endif
     switch (code) {
         case 0x2C: // GET_SMBUS_TELEMETRY_ADDR
-            g_a_tile.reset_unit_scratch[3] = ARC_SMBUS_TELEMETRY_CSM_OFFSET;
+#if TT_ARCH_VERSION == 0
+            *resp = ARC_SMBUS_TELEMETRY_CSM_OFFSET;
+#elif TT_ARCH_VERSION == 1
+            TTSIM_ERROR(UnimplementedFunctionality, "arc message code=0x%x", code);
+#endif
             break;
         case 0x34: // GET_AICLK
-            g_a_tile.reset_unit_scratch[3] = 1000; // AI CLK = 1000MHz
+#if TT_ARCH_VERSION == 0
+            *resp = 1000; // AI CLK = 1000MHz
+#elif TT_ARCH_VERSION == 1
+            TTSIM_ERROR(UnimplementedFunctionality, "arc message code=0x%x", code);
+#endif
             break;
         case 0x57: // ARC_GET_HARVESTING
-            g_a_tile.reset_unit_scratch[3] = 0; // nothing harvested
+            *resp = 0; // nothing harvested
             break;
         case 0x58: // SET_ETH_DRAM_TRAINED_STATUS
-            g_a_tile.reset_unit_scratch[3] = 1;
+#if TT_ARCH_VERSION == 0
+            *resp = 1;
+#elif TT_ARCH_VERSION == 1
+            TTSIM_ERROR(UnimplementedFunctionality, "arc message code=0x%x", code);
+#endif
             break;
         case 0x11: // NOP
+        case 0x21: // POWER_SETTING
         case 0x51: // PCIE_INDEX
         case 0x52: // ARC_GO_BUSY
         case 0x53: // ARC_GO_SHORT_IDLE
         case 0x54: // ARC_GO_LONG_IDLE
+        case 0x56: // TRIGGER_RESET
+        case 0x90: // TEST
         case 0xA0: // ASIC_STATE0
         case 0xA3: // ASIC_STATE3
         case 0xB6: // PCIE_RETRAIN
         case 0xB7: // CURR_DATE
         case 0xBC: // UPDATE_M3_AUTO_RESET_TIMEOUT
         case 0xBA: // DEASSERT_RISCV_RESET
+        case 0xC1: // SET_WDT_TIMEOUT
             break; // does not modify modeled subsystems
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "arc message code=0x%x", code);
     }
+#if TT_ARCH_VERSION == 0
     g_a_tile.reset_unit_scratch[5] = (exit_code << 16) | code;
-    g_a_tile.arc_misc_cntl &= ~ARC_MISC_CNTL_IRQ0;
+#endif
+}
+
+#if TT_ARCH_VERSION == 1
+// Drain one queue's request ring, writing a response for each request.
+static void arc_drain_queue(uint32_t queue, uint32_t num_entries) {
+    uint32_t req_wr_ptr = mem_rd<uint32_t>(&g_a_tile.csm[queue + 0x00]);
+    uint32_t req_rd_ptr = mem_rd<uint32_t>(&g_a_tile.csm[queue + 0x10]);
+    uint32_t res_wr_ptr = mem_rd<uint32_t>(&g_a_tile.csm[queue + 0x14]);
+    uint32_t req_base = queue + ARC_MSG_QUEUE_HEADER_SIZE;
+    uint32_t res_base = req_base + num_entries * ARC_MSG_ENTRY_SIZE;
+    uint32_t occupied = (req_wr_ptr - req_rd_ptr) % (2 * num_entries);
+    TTSIM_VERIFY(occupied <= num_entries, UndefinedBehavior, "arc msg queue: occupied=%u num_entries=%u", occupied, num_entries);
+    for (uint32_t k = 0; k < occupied; k++) {
+        uint32_t req_off = req_base + (req_rd_ptr % num_entries) * ARC_MSG_ENTRY_SIZE;
+        uint32_t res_off = res_base + (res_wr_ptr % num_entries) * ARC_MSG_ENTRY_SIZE;
+        uint32_t req[8], resp[8];
+        for (uint32_t i = 0; i < 8; i++) {
+            req[i] = mem_rd<uint32_t>(&g_a_tile.csm[req_off + 4 * i]);
+        }
+        uint8_t code = req[0] & 0xff;
+        for (uint32_t i = 0; i < 8; i++) {
+            resp[i] = 0;
+        }
+        arc_service_message(code, resp);
+        for (uint32_t i = 0; i < 8; i++) {
+            mem_wr<uint32_t>(&g_a_tile.csm[res_off + 4 * i], resp[i]);
+        }
+        res_wr_ptr = (res_wr_ptr + 1) % (2 * num_entries);
+        req_rd_ptr = (req_rd_ptr + 1) % (2 * num_entries);
+    }
+    mem_wr<uint32_t>(&g_a_tile.csm[queue + 0x10], req_rd_ptr);
+    mem_wr<uint32_t>(&g_a_tile.csm[queue + 0x14], res_wr_ptr);
+}
+
+// host<->ARC message queues, laid out in CSM: the queue control block points at an array of ARC_MSG_NUM_QUEUES queues.
+// Each queue is a 32-byte header + num_entries 32-byte request slots + the same response slots.
+static void arc_process_message_queue() {
+    TTSIM_VERIFY(g_a_tile.scratch_ram[11] >= ARC_CSM_BASE, UndefinedBehavior, "arc msg queue ptr=%x", g_a_tile.scratch_ram[11]);
+    uint32_t qcb = g_a_tile.scratch_ram[11] - ARC_CSM_BASE;
+    uint32_t queue_base = mem_rd<uint32_t>(&g_a_tile.csm[qcb]) - ARC_CSM_BASE;
+    uint32_t num_entries = mem_rd<uint32_t>(&g_a_tile.csm[qcb + 4]) & 0xff;
+    TTSIM_VERIFY(num_entries, UndefinedBehavior, "arc msg queue: num_entries is zero");
+    uint32_t stride = ARC_MSG_QUEUE_HEADER_SIZE + 2 * num_entries * ARC_MSG_ENTRY_SIZE;
+    for (uint32_t q = 0; q < ARC_MSG_NUM_QUEUES; q++) {
+        arc_drain_queue(queue_base + q * stride, num_entries);
+    }
 }
 #endif
 
@@ -2266,10 +2349,12 @@ static void arc_reset_unit_wr32(uint32_t offset, uint32_t value) {
             g_a_tile.arc_misc_cntl = value;
             if (value & ARC_MISC_CNTL_IRQ0) {
 #if TT_ARCH_VERSION == 0
-                arc_service_message();
+                uint8_t code = g_a_tile.reset_unit_scratch[5] & 0xff;
+                arc_service_message(code, &g_a_tile.reset_unit_scratch[3]);
 #else
-                TTSIM_ERROR(UnimplementedFunctionality, "ARC message queue not modeled");
+                arc_process_message_queue();
 #endif
+                g_a_tile.arc_misc_cntl &= ~ARC_MISC_CNTL_IRQ0;
             }
             break;
         default:
@@ -2307,7 +2392,8 @@ static void arc_apb_wr32(uint32_t apb_offset, uint32_t value) {
             break;
 #if TT_ARCH_VERSION == 1
         case ARC_APB_MSI_FIFO_BASE ... ARC_APB_MSI_FIFO_LIMIT:
-            TTSIM_ERROR(UnimplementedFunctionality, "BH ARC message queue (ARC_MSI_FIFO doorbell) not modeled");
+            arc_process_message_queue();
+            break;
 #endif
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", apb_offset);
