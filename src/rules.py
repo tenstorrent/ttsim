@@ -72,7 +72,7 @@ def rules(ctx):
             if num_chips >= 16 and ctx.host.arch == 'x86_64':
                 gcc_opts += ['-mcmodel=medium'] # required for >2GB BSS in very large (Galaxy) sims
 
-            c_files = ['libttsim.cpp', 'rv32.cpp', 'sim.cpp', 'tensix.cpp', 'tile.cpp', 'fma.cpp']
+            c_files = ['libttsim.cpp', 'common.cpp', 'rv32.cpp', 'sim.cpp', 'tensix.cpp', 'tile.cpp', 'fma.cpp']
 
             o_files = []
             for file in c_files:
@@ -92,5 +92,26 @@ def rules(ctx):
                     cmd += ['-Wl,--strip-all']
             ctx.rule(target, link_so_deps, cmd=cmd)
             build_targets += [target]
+
+    # Standalone full-system riscv64 simulator, aka ttsim-riscv64
+    for config in config_compile_opts:
+        out_dir = f'_out/{config}_riscv64'
+        gcc_opts = [
+            *compile_opts,
+            *config_compile_opts[config],
+            '-DTTSIM_RV64_SYSTEM=1',
+        ]
+        c_files = ['main.cpp', 'common.cpp', 'rv64_fpu.cpp', 'rv64_system.cpp']
+        o_files = []
+        for file in c_files:
+            o_file = f'{out_dir}/{file.replace(".cpp", ".o")}'
+            d_file = o_file.replace('.o', '.d')
+            cmd = ['g++', *gcc_opts, '-c', file, '-o', o_file]
+            ctx.rule(o_file, file, cmd=cmd, depfile=d_file)
+            o_files += [o_file]
+        target = f'{out_dir}/ttsim'
+        cmd = ['g++', *o_files, '-o', target]
+        ctx.rule(target, o_files, cmd=cmd)
+        build_targets += [target]
 
     ctx.rule(':build', build_targets)

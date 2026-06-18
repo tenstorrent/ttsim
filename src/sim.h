@@ -479,8 +479,6 @@ struct ArcTile {
     uint8_t csm[ARC_CSM_SIZE];
     uint32_t reset_unit_scratch[8];
     uint32_t arc_misc_cntl;
-
-    uint32_t niu_cfg_0[NUM_NOCS];
 #if TT_ARCH_VERSION == 1
     uint32_t scratch_ram[16];
 #endif

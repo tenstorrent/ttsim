@@ -85,21 +85,6 @@ static void verify_iatu_region_write(uint32_t offset, uint32_t value) {
                 "bar2: outbound iATU region=%u base=0x%llx > limit=0x%llx", region, base, limit);
             TTSIM_VERIFY(limit <= IATU_OUTBOUND_WINDOW_LIMIT, UndefinedBehavior,
                 "bar2: outbound iATU region=%u limit=0x%llx outside window", region, limit);
-            for (uint32_t j = 0; j < 16; j++) {
-                if (j == region || !(g_p_tile.iatu_outbound[j].ctrl_2 & IATU_REGION_ENABLE)) {
-                    continue;
-                }
-                const IatuRegion &o = g_p_tile.iatu_outbound[j];
-                uint64_t obase = (uint64_t(o.upper_base) << 32) | o.lower_base;
-#if TT_ARCH_VERSION == 0
-                uint64_t olimit = (uint64_t(o.upper_base) << 32) | o.lower_limit;
-#else
-                uint64_t olimit = (uint64_t(o.upper_limit) << 32) | o.lower_limit;
-#endif
-                TTSIM_VERIFY((base > olimit) || (obase > limit), UndefinedBehavior,
-                    "bar2: outbound iATU region=%u [0x%llx,0x%llx] overlaps region=%u [0x%llx,0x%llx]",
-                    region, base, limit, j, obase, olimit);
-            }
         }
 #if TT_ARCH_VERSION == 1
         switch (reg) {

@@ -1014,9 +1014,9 @@ uint32_t pcie_niu_rd32(uint32_t noc_instance, uint32_t offset) {
         case NOC_REGS_NOC_NODE_ID:
             return noc_node_id(noc_instance, tile_to_coord('P', 0));
         case NOC_REGS_NIU_CFG_0:
-            return 1u << 14;// Bit 14 advertises NoC coordinate translation, which the sim always models
+            return 1u << 14; // Bit 14 advertises NoC coordinate translation, which the sim always models
         default:
-            TTSIM_ERROR(UnimplementedFunctionality, "pcie_niu: noc=%d offset=0x%x", noc_instance, offset);
+            TTSIM_ERROR(UnimplementedFunctionality, "noc=%d offset=0x%x", noc_instance, offset);
     }
 }
 
@@ -2164,17 +2164,27 @@ bool tile_mmio_wr64(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_
 }
 
 static uint64_t translate_pci_dma_addr(uint64_t addr, uint32_t size) {
+    TTSIM_VERIFY(size, UndefinedBehavior, "size=%d", size);
 #if TT_ARCH_VERSION == 0
     constexpr uint64_t WINDOW_BASE = 0x800000000ull;
     constexpr uint64_t WINDOW_SIZE = 0xFFFE0000ull;
-#else
-    constexpr uint64_t WINDOW_BASE = 1ull << 60;
-    constexpr uint64_t WINDOW_SIZE = 1ull << 58;
-#endif
-    TTSIM_VERIFY(size, UndefinedBehavior, "size=%d", size);
     TTSIM_VERIFY(addr >= WINDOW_BASE, UnimplementedFunctionality, "addr=0x%llx size=%d", addr, size);
     uint64_t offset = addr - WINDOW_BASE;
     TTSIM_VERIFY(offset + size <= WINDOW_SIZE, UnimplementedFunctionality, "addr=0x%llx size=%d", addr, size);
+#else
+    // NoC-to-host is 64 windows of 2^58 bytes. Windows 0-3 go straight to the host IOMMU.
+    // Windows 4-7 pass through the outbound iATU first, then onwards to the host IOMMU.
+    constexpr uint64_t SUBWINDOW_SIZE = 1ull << 58;
+    uint64_t offset = addr & (SUBWINDOW_SIZE - 1);
+    TTSIM_VERIFY(offset + size <= SUBWINDOW_SIZE, UnimplementedFunctionality, "addr=0x%llx size=%d", addr, size);
+    uint64_t window = addr >> 58;
+    if (window < 4) {
+        return offset;
+    }
+    TTSIM_VERIFY(window < 8, UnimplementedFunctionality, "addr=0x%llx size=%d", addr, size);
+#endif
+    bool matched = false;
+    uint64_t translated = offset; // identity mapping for offsets outside any configured region
     for (size_t i = 0; i < 16; i++) {
         const IatuRegion &r = g_p_tile.iatu_outbound[i];
         if (!(r.ctrl_2 & IATU_REGION_ENABLE)) {
@@ -2187,12 +2197,14 @@ static uint64_t translate_pci_dma_addr(uint64_t addr, uint32_t size) {
         uint64_t limit = (uint64_t(r.upper_limit) << 32) | r.lower_limit;
 #endif
         if ((offset >= base) && (offset + size - 1 <= limit)) {
+            TTSIM_VERIFY(!matched, UndefinedBehavior,
+                "bar2: outbound iATU offset=0x%llx size=%u matches multiple enabled regions", offset, size);
             uint64_t target = (uint64_t(r.upper_target) << 32) | r.lower_target;
-            return target + (offset - base);
+            translated = target + (offset - base);
+            matched = true;
         }
     }
-    // identity mapping for offsets outside any configured region
-    return offset;
+    return translated;
 }
 
 #define ARC_MISC_CNTL_IRQ0 (1u << 16)
@@ -2366,7 +2378,8 @@ static uint32_t arc_niu_rd32(uint32_t noc_instance, uint32_t offset) {
     switch (offset) {
         case NOC_REGS_NOC_NODE_ID:
             return noc_node_id(noc_instance, tile_to_coord('A', 0));
-        case NOC_REGS_NIU_CFG_0: return g_a_tile.niu_cfg_0[noc_instance];
+        case NOC_REGS_NIU_CFG_0:
+            return 1u << 14; // Bit 14 advertises NoC coordinate translation, which the sim always models
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "noc=%d offset=0x%x", noc_instance, offset);
     }
@@ -2469,6 +2482,19 @@ static void arc_tile_wr_bytes(uint64_t addr, const void *p, uint32_t size) {
 void tile_rd_bytes(uint32_t coord, uint64_t addr, void *p, uint32_t size) {
     auto [tile_type, tile_id] = coord_to_tile(coord);
     if (tile_type == 'D') {
+#if TT_ARCH_VERSION == 0
+        if ((addr >= DRAM_APB_BASE) && (addr <= DRAM_APB_LIMIT)) {
+            uint32_t apb_offset = addr - DRAM_APB_BASE;
+            TTSIM_VERIFY((size == 4) && !(apb_offset & 3), UndefinedBehavior, "dram apb offset=0x%x, size=%d", apb_offset, size);
+            TTSIM_VERIFY((apb_offset >= DRAM_APB_NIU_BASE) && (apb_offset <= DRAM_APB_NIU_LIMIT),
+                UnimplementedFunctionality, "dram apb offset=0x%x", apb_offset);
+            uint32_t niu_offset = apb_offset % 0x8000;
+            uint32_t noc_instance = (apb_offset / 0x8000) % 2;
+            TTSIM_VERIFY(niu_offset == NOC_REGS_NOC_NODE_ID, UnimplementedFunctionality, "dram apb niu offset=0x%x", niu_offset);
+            mem_wr<uint32_t>(p, noc_node_id(noc_instance, coord));
+            return;
+        }
+#endif
         TTSIM_VERIFY(addr + size <= DRAM_CHANNEL_SIZE, UndefinedBehavior, "DRAM read overrun");
         memcpy(p, &g_dram[tile_id].p_mem[addr], size);
     } else if (tile_type == 'E') {

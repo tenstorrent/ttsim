@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Definitions of the central global simulator state and shared runtime utilities (logging, etc.).
-#include <inttypes.h>
-#include <stdarg.h>
 #include <time.h>
 #include <sys/mman.h>
 #include "sim.h"
@@ -12,38 +10,8 @@ uint32_t g_current_chip_id;
 uint64_t g_clock;
 ChipState g_chips[NUM_CHIPS];
 
-void ttsim_printf(const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    printf("[%" PRId64 "] ", g_clock);
-    vprintf(fmt, args);
-    va_end(args);
-}
-
-void ttsim_error(TTSimErrorCategory category, const char *func, const char *fmt, ...) {
-    const char *category_str = "";
-    switch (category) {
-        case TTSimErrorCategory::UndefinedBehavior: category_str = "UndefinedBehavior"; break;
-        case TTSimErrorCategory::UnpredictableValueUsed: category_str = "UnpredictableValueUsed"; break;
-        case TTSimErrorCategory::NonContractualBehavior: category_str = "NonContractualBehavior"; break;
-        case TTSimErrorCategory::AssertionFailure: category_str = "AssertionFailure"; break;
-        case TTSimErrorCategory::MissingSpecification: category_str = "MissingSpecification"; break;
-        case TTSimErrorCategory::UntestedFunctionality: category_str = "UntestedFunctionality"; break;
-        case TTSimErrorCategory::UnimplementedFunctionality: category_str = "UnimplementedFunctionality"; break;
-        case TTSimErrorCategory::UnsupportedFunctionality: category_str = "UnsupportedFunctionality"; break;
-        case TTSimErrorCategory::SystemError: category_str = "SystemError"; break;
-        case TTSimErrorCategory::ConfigurationError: category_str = "ConfigurationError"; break;
-        default: break;
-    }
-    printf("[%" PRId64 "] ERROR: %s: %s%s", g_clock, category_str, func, fmt ? ": " : "\n");
-    if (fmt) {
-        va_list args;
-        va_start(args, fmt);
-        vprintf(fmt, args);
-        va_end(args);
-    }
-    fflush(stdout);
-    _Exit(1);
+uint64_t ttsim_get_clock() {
+    return g_clock;
 }
 
 void ttsim_init() {

@@ -6,7 +6,17 @@
 // https://csg.csail.mit.edu/6.375/6_375_2019_www/resources/riscv-spec.pdf
 // https://five-embeddev.com/quickref/isa_ext.html
 
+#if !defined(TTSIM_RV64_SYSTEM)
+#define TTSIM_RV64_SYSTEM 0 // default off; the standalone full-system riscv64 build sets it to 1
+#endif
+
+#if TTSIM_RV64_SYSTEM
+#define TT_ARCH_VERSION -1 // means "no TT hardware present"
+#include "rv64_system.h"
+#include "rv64_fpu.h"
+#else
 #include "sim.h"
+#endif
 #include "riscv_defines.h"
 #if (TT_ARCH_VERSION >= 1) && (XLEN == 32)
 #include "riscv_float.h"
@@ -49,6 +59,7 @@ static void dcache_invalidate(RiscvHartState *p_hart) {
 
 void RV_XLEN_PREFIX(init)(RiscvHartState *p_hart, char tile_type, uint32_t tile_id, uint32_t riscv_id) {
     memset(p_hart, 0, sizeof(RiscvHartState));
+#if !TTSIM_RV64_SYSTEM
     p_hart->tile_type = tile_type;
     p_hart->tile_id = tile_id;
     p_hart->riscv_id = riscv_id;
@@ -89,6 +100,7 @@ void RV_XLEN_PREFIX(init)(RiscvHartState *p_hart, char tile_type, uint32_t tile_
     RV_XLEN_PREFIX(icache_invalidate)(p_hart);
 #if TT_ARCH_VERSION >= 1
     dcache_invalidate(p_hart);
+#endif
 #endif
 }
 
@@ -420,7 +432,7 @@ template<bool neg_product, bool neg_addend> static void RV_XLEN_PREFIX(f_fma)(Ri
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zfh/F/D/Q");
 #elif XLEN == 64
-    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+    rv64_fpu_fma(p_hart, inst, neg_product, neg_addend);
 #else
     uint32_t fmt = bits<26,25>(inst);
     TTSIM_VERIFY(fmt != 1, UndefinedBehavior, "babyrisc does not support D");
@@ -451,7 +463,7 @@ static void RV_XLEN_PREFIX(f_alu)(RiscvHartState *p_hart, uint32_t inst) {
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zfh/F/D/Q");
 #elif XLEN == 64
-    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+    rv64_fpu_op(p_hart, inst);
 #else
     uint32_t funct7 = bits<31,25>(inst);
     uint32_t funct3 = bits<14,12>(inst);
@@ -574,8 +586,10 @@ static void RV_XLEN_PREFIX(v_alu)(RiscvHartState *p_hart, uint32_t inst) {
 #endif
 }
 
+#if !TTSIM_RV64_SYSTEM
 static void dcache_access(RiscvHartState *p_hart, uint_xlen_t addr, bool store) {
 }
+#endif
 
 #if XLEN == 32
 static uint8_t *get_local_mem_ptr(RiscvHartState *p_hart, uint_xlen_t addr) {
@@ -590,6 +604,13 @@ static uint8_t *get_local_mem_ptr(RiscvHartState *p_hart, uint_xlen_t addr) {
 template<class T> static bool RV_XLEN_PREFIX(mem_rd)(RiscvHartState *p_hart, uint_xlen_t addr, T *p_data) {
     const uint32_t size = sizeof(T);
     static_assert((size == 1) || (size == 2) || (size == 4) || (size == 8), "unsupported object size");
+#if TTSIM_RV64_SYSTEM
+    if (const uint8_t *p_mem = rv64_dtlb_host(p_hart, addr, size, false)) [[likely]] {
+        *p_data = mem_rd<T>(p_mem);
+        return true;
+    }
+    return rv64_sys_load(p_hart, addr, p_data, size);
+#else
     TTSIM_VERIFY(!(addr & (size - 1)), NonContractualBehavior, "unaligned addr=0x%llx size=%d", uint64_t(addr), size);
     if (addr < p_hart->sram_size) {
         dcache_access(p_hart, addr, false);
@@ -622,11 +643,19 @@ template<class T> static bool RV_XLEN_PREFIX(mem_rd)(RiscvHartState *p_hart, uin
         *p_data = data;
         return done;
     }
+#endif
 }
 
 template<class T> static bool RV_XLEN_PREFIX(mem_wr)(RiscvHartState *p_hart, uint_xlen_t addr, T data) {
     const uint32_t size = sizeof(T);
     static_assert((size == 1) || (size == 2) || (size == 4) || (size == 8), "unsupported object size");
+#if TTSIM_RV64_SYSTEM
+    if (uint8_t *p_mem = rv64_dtlb_host(p_hart, addr, size, true)) [[likely]] {
+        mem_wr<T>(p_mem, data);
+        return true;
+    }
+    return rv64_sys_store(p_hart, addr, &data, size);
+#else
     TTSIM_VERIFY(!(addr & (size - 1)), NonContractualBehavior, "unaligned addr=0x%llx size=%d", uint64_t(addr), size);
     if (addr < p_hart->sram_size) {
         mem_wr<T>(&p_hart->p_sram[addr], data);
@@ -646,6 +675,7 @@ template<class T> static bool RV_XLEN_PREFIX(mem_wr)(RiscvHartState *p_hart, uin
         return tile_mmio_wr64(p_hart->tile_type, p_hart->tile_id, p_hart->riscv_id, addr, data);
     }
     TTSIM_ERROR(UnsupportedFunctionality, "addr=0x%llx size=%d", uint64_t(addr), size);
+#endif
 }
 
 template<class T, class T_SEXT> static void RV_XLEN_PREFIX(load)(RiscvHartState *p_hart, uint32_t inst) {
@@ -680,21 +710,93 @@ template<class T> static void RV_XLEN_PREFIX(atomic)(RiscvHartState *p_hart, uin
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zaamo");
 #else
+#if !TTSIM_RV64_SYSTEM
     if constexpr (sizeof(T) == 8) {
         TTSIM_ERROR(UntestedFunctionality, "64-bit atomic");
     }
+#endif
     uint32_t funct5 = bits<31,27>(inst); // aq/rl flags are ignored
     uint32_t r_addr = bits<19,15>(inst);
     uint32_t r_src = bits<24,20>(inst);
     uint32_t r_dst = bits<11,7>(inst);
 
+    using S = std::make_signed_t<T>;
     uint_xlen_t addr = p_hart->x_regs[r_addr];
+#if TTSIM_RV64_SYSTEM
+    TTSIM_VERIFY(!(addr & (sizeof(T) - 1)), UnimplementedFunctionality, "unaligned addr=0x%llx", uint64_t(addr));
+    if (!rv64_sys_atomic_dram(p_hart, addr, sizeof(T), funct5 == 0x02)) {
+        return; // reject LR/SC/AMO on device/MMIO memory
+    }
+    if (funct5 == 0x02) { // LR
+        TTSIM_VERIFY(!r_src, UnimplementedFunctionality, "LR r_src=%d", r_src);
+        T value;
+        if (!rv64_sys_load(p_hart, addr, &value, sizeof(T))) {
+            return;
+        }
+        p_hart->reservation_valid = true;
+        p_hart->reservation_addr = addr;
+        p_hart->reservation_size = sizeof(T);
+        p_hart->reservation_value = uint64_t(value);
+        rv64_sys_lr_reserve(p_hart, addr, sizeof(T)); // evict this page from all other harts' DTLBs
+        if (r_dst) {
+            if constexpr (sizeof(T) == 4) {
+                p_hart->x_regs[r_dst] = uint_xlen_t(int64_t(int32_t(value)));
+            } else {
+                p_hart->x_regs[r_dst] = value;
+            }
+        }
+        return;
+    }
+    if (funct5 == 0x03) { // SC
+        bool hit = p_hart->reservation_valid && (p_hart->reservation_addr == addr) && (p_hart->reservation_size == sizeof(T));
+        if (hit) { // require that value in memory has not changed underneath us
+            T cur_value;
+            if (!rv64_sys_load(p_hart, addr, &cur_value, sizeof(T))) {
+                return; // re-read (sets trap on fault)
+            }
+            if (uint64_t(cur_value) != p_hart->reservation_value) {
+                hit = false;
+            }
+        }
+        p_hart->reservation_valid = false;
+        if (hit) {
+            T src_val = T(p_hart->x_regs[r_src]);
+            if (!rv64_sys_store(p_hart, addr, &src_val, sizeof(T))) {
+                return;
+            }
+        }
+        if (r_dst) {
+            p_hart->x_regs[r_dst] = hit ? 0 : 1;
+        }
+        return;
+    }
+    T old_val;
+    if (!rv64_sys_load(p_hart, addr, &old_val, sizeof(T))) {
+        return;
+    }
+    T src_val = T(p_hart->x_regs[r_src]);
+    T new_val;
+    switch (funct5) {
+        case 0x00: new_val = old_val + src_val; break; // AMOADD
+        case 0x01: new_val = src_val; break; // AMOSWAP
+        case 0x04: new_val = old_val ^ src_val; break; // AMOXOR
+        case 0x08: new_val = old_val | src_val; break; // AMOOR
+        case 0x0C: new_val = old_val & src_val; break; // AMOAND
+        case 0x10: new_val = T(std::min<S>(S(old_val), S(src_val))); break; // AMOMIN
+        case 0x14: new_val = T(std::max<S>(S(old_val), S(src_val))); break; // AMOMAX
+        case 0x18: new_val = std::min(old_val, src_val); break; // AMOMINU
+        case 0x1C: new_val = std::max(old_val, src_val); break; // AMOMAXU
+        default: TTSIM_ERROR(UnimplementedFunctionality, "funct5=%d", funct5);
+    }
+    if (!rv64_sys_store(p_hart, addr, &new_val, sizeof(T))) {
+        return;
+    }
+#else
     TTSIM_VERIFY(!(addr & (sizeof(T) - 1)), UndefinedBehavior, "unaligned addr=0x%llx", uint64_t(addr));
     TTSIM_VERIFY(addr < p_hart->sram_size, UndefinedBehavior, "addr=0x%llx not in sram", uint64_t(addr));
     auto *p_sram = &p_hart->p_sram[addr];
     T old_val = mem_rd<T>(p_sram);
     T src_val = T(p_hart->x_regs[r_src]);
-    using S = std::make_signed_t<T>;
     switch (funct5) {
         case 0x00: mem_wr<T>(p_sram, old_val + src_val); break; // AMOADD
         case 0x01: mem_wr<T>(p_sram, src_val); break; // AMOSWAP
@@ -714,6 +816,7 @@ template<class T> static void RV_XLEN_PREFIX(atomic)(RiscvHartState *p_hart, uin
         case 0x1C: mem_wr<T>(p_sram, std::max(old_val, src_val)); break; // AMOMAXU
         default: TTSIM_ERROR(UndefinedBehavior, "funct5=%d", funct5);
     }
+#endif
 
     if (r_dst) {
         if constexpr (sizeof(T) == 4) {
@@ -729,7 +832,11 @@ template<class T> static void RV_XLEN_PREFIX(f_load)(RiscvHartState *p_hart, uin
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zfh/F/D/Q");
 #elif XLEN == 64
-    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+    if constexpr ((sizeof(T) == 4) || (sizeof(T) == 8)) {
+        rv64_fpu_load(p_hart, inst, sizeof(T));
+    } else {
+        TTSIM_ERROR(UnimplementedFunctionality, "Zfh/Q are unsupported");
+    }
 #else
     if constexpr (sizeof(T) == 2) {
         TTSIM_ERROR(UnsupportedFunctionality, "babyrisc non-compliant Zfh extension is out of scope");
@@ -758,7 +865,11 @@ template<class T> static void RV_XLEN_PREFIX(f_store)(RiscvHartState *p_hart, ui
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zfh/F/D/Q");
 #elif XLEN == 64
-    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+    if constexpr ((sizeof(T) == 4) || (sizeof(T) == 8)) {
+        rv64_fpu_store(p_hart, inst, sizeof(T));
+    } else { // Zfh/Q unsupported
+        TTSIM_ERROR(UnimplementedFunctionality, "Zfh/Q are unsupported");
+    }
 #else
     if constexpr (sizeof(T) == 2) {
         TTSIM_ERROR(UnsupportedFunctionality, "babyrisc non-compliant Zfh extension is out of scope");
@@ -910,6 +1021,11 @@ template<class branch_op> static void RV_XLEN_PREFIX(branch)(RiscvHartState *p_h
 static void RV_XLEN_PREFIX(fence)(RiscvHartState *p_hart, uint32_t inst) {
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UnsupportedFunctionality, "fence instructions do not enforce memory ordering on Wormhole and should not be used");
+#elif TTSIM_RV64_SYSTEM
+    // Any FENCE other than PAUSE is currently a NOP
+    if (inst == 0x0100000F) {
+        rv64_sys_pause_yield(p_hart);
+    }
 #else
     uint32_t r_dst = bits<11,7>(inst);
     TTSIM_VERIFY(!r_dst, UnsupportedFunctionality, "r_dst=%d", r_dst);
@@ -951,6 +1067,38 @@ static void RV_XLEN_PREFIX(fence_i)(RiscvHartState *p_hart, uint32_t inst) {
 }
 
 static void RV_XLEN_PREFIX(ecall_ebreak)(RiscvHartState *p_hart, uint32_t inst) {
+#if TTSIM_RV64_SYSTEM
+    if (inst == 0x00000073) { // ECALL
+        uint64_t cause = (p_hart->priv == PRIV_M) ? EXC_ECALL_M :
+                         (p_hart->priv == PRIV_S) ? EXC_ECALL_S : EXC_ECALL_U;
+        rv64_sys_raise(p_hart, cause, 0);
+    } else if (inst == 0x00100073) { // EBREAK
+        rv64_sys_raise(p_hart, EXC_BREAKPOINT, p_hart->pc - 4);
+    } else if (inst == 0x30200073) { // MRET
+        if (p_hart->priv != PRIV_M) {
+            return rv64_sys_raise(p_hart, EXC_ILLEGAL_INST, inst);
+        }
+        rv64_sys_xret(p_hart, true);
+    } else if (inst == 0x10200073) { // SRET
+        if ((p_hart->priv < PRIV_S) || ((p_hart->priv == PRIV_S) && (p_hart->mstatus & MSTATUS_TSR))) {
+            return rv64_sys_raise(p_hart, EXC_ILLEGAL_INST, inst);
+        }
+        rv64_sys_xret(p_hart, false);
+    } else if (inst == 0x10500073) { // WFI
+        if ((p_hart->priv != PRIV_M) && (p_hart->mstatus & MSTATUS_TW)) {
+            return rv64_sys_raise(p_hart, EXC_ILLEGAL_INST, inst);
+        }
+        p_hart->wfi_retired = true;
+        p_hart->steps_left = 0;
+    } else if ((inst & 0xFE007FFFu) == 0x12000073u) { // SFENCE.VMA rs1, rs2
+        if ((p_hart->priv < PRIV_S) || ((p_hart->priv == PRIV_S) && (p_hart->mstatus & MSTATUS_TVM))) {
+            return rv64_sys_raise(p_hart, EXC_ILLEGAL_INST, inst);
+        }
+        rv64_sys_sfence(p_hart, p_hart->x_regs[bits<19,15>(inst)], p_hart->x_regs[bits<24,20>(inst)]);
+    } else {
+        rv64_sys_raise(p_hart, EXC_ILLEGAL_INST, inst);
+    }
+#else
     if (inst == 0x73) {
         p_hart->x_regs[10] = libttsim_syscall(p_hart->tile_type, p_hart->tile_id, p_hart->riscv_id,
             p_hart->x_regs[17], p_hart->x_regs[10], p_hart->x_regs[11], p_hart->x_regs[12]);
@@ -963,6 +1111,7 @@ static void RV_XLEN_PREFIX(ecall_ebreak)(RiscvHartState *p_hart, uint32_t inst) 
     } else {
         TTSIM_ERROR(UnsupportedFunctionality, "inst=0x%x", inst);
     }
+#endif
 }
 
 #if TT_ARCH_VERSION >= 1
@@ -1015,9 +1164,71 @@ static void write_csr(RiscvHartState *p_hart, uint32_t csr, uint_xlen_t data) {
 }
 #endif
 
+#if TTSIM_RV64_SYSTEM
+// Shared Zicsr read-modify-write. op: 0=write, 1=set, 2=clear.
+// An illegal/absent CSR or privilege violation raises an illegal-instruction trap and writes no rd.
+static void rv64_csr_op(RiscvHartState *p_hart, uint32_t inst, uint64_t src, bool do_write, uint32_t op) {
+    uint32_t r_dst = bits<11,7>(inst);
+    uint32_t csr = bits<31,20>(inst);
+
+    // Privilege + read-only enforcement (priv-spec 2.1, "CSR Field Specifications").
+    // csr[9:8] encodes the lowest privilege that may access the CSR; csr[11:10]==3 marks it read-only.
+    // A read-only write attempt (do_write true) and any access from too low a privilege both raise an
+    // illegal-instruction trap before any read/write side effect.
+    if (((csr >> 8) & 3) > p_hart->priv) {
+        return rv64_sys_raise(p_hart, EXC_ILLEGAL_INST, inst);
+    }
+    if (do_write && ((csr >> 10) & 3) == 3) {
+        return rv64_sys_raise(p_hart, EXC_ILLEGAL_INST, inst);
+    }
+
+    // S-mode access to satp traps when mstatus.TVM is set. M-mode is exempt.
+    if ((csr == CSR_SATP) && (p_hart->priv == PRIV_S) && (p_hart->mstatus & MSTATUS_TVM)) {
+        return rv64_sys_raise(p_hart, EXC_ILLEGAL_INST, inst);
+    }
+
+    // mcounteren/scounteren gate reads of the unprivileged cycle/time/instret/hpm shadows
+    // (0xC00..0xC1F). A bit clear in mcounteren makes the counter inaccessible below M-mode; a bit
+    // clear in scounteren makes it inaccessible below S-mode. M-mode is always permitted.
+    if (csr >= 0xC00 && csr <= 0xC1F && unsigned(p_hart->priv) < unsigned(PRIV_M)) {
+        uint32_t bit = csr - 0xC00;
+        if (!((p_hart->mcounteren >> bit) & 1) ||
+            ((p_hart->priv == PRIV_U) && !((p_hart->scounteren >> bit) & 1))) {
+            return rv64_sys_raise(p_hart, EXC_ILLEGAL_INST, inst);
+        }
+    }
+
+    // FP CSRs (fflags/frm/fcsr) are inaccessible while mstatus.FS == Off.
+    if (((csr == CSR_FFLAGS) || (csr == CSR_FRM) || (csr == CSR_FCSR)) && !(p_hart->mstatus & MSTATUS_FS)) {
+        return rv64_sys_raise(p_hart, EXC_ILLEGAL_INST, inst);
+    }
+
+    bool ok = true;
+    uint64_t old = 0;
+    if ((r_dst != 0) || (op != 0)) { // CSRRW with rd==x0 performs no read (no read side effects)
+        old = rv64_sys_read_csr(p_hart, csr, &ok);
+        if (!ok) {
+            return rv64_sys_raise(p_hart, EXC_ILLEGAL_INST, inst);
+        }
+    }
+    uint64_t newv = (op == 0) ? src : (op == 1) ? (old | src) : (old & ~src);
+    if (do_write) {
+        rv64_sys_write_csr(p_hart, csr, newv, &ok);
+        if (!ok) {
+            return rv64_sys_raise(p_hart, EXC_ILLEGAL_INST, inst);
+        }
+    }
+    if (r_dst) {
+        p_hart->x_regs[r_dst] = old;
+    }
+}
+#endif
+
 static void RV_XLEN_PREFIX(csrrw)(RiscvHartState *p_hart, uint32_t inst) {
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zicsr");
+#elif TTSIM_RV64_SYSTEM
+    rv64_csr_op(p_hart, inst, p_hart->x_regs[bits<19,15>(inst)], true, 0);
 #else
     uint32_t r_dst = bits<11,7>(inst);
     TTSIM_VERIFY(!r_dst, UntestedFunctionality, "r_dst=%d", r_dst);
@@ -1038,6 +1249,9 @@ static void RV_XLEN_PREFIX(csrrw)(RiscvHartState *p_hart, uint32_t inst) {
 static void RV_XLEN_PREFIX(csrrs)(RiscvHartState *p_hart, uint32_t inst) {
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zicsr");
+#elif TTSIM_RV64_SYSTEM
+    uint32_t r_src = bits<19,15>(inst);
+    rv64_csr_op(p_hart, inst, r_src ? p_hart->x_regs[r_src] : 0, r_src != 0, 1);
 #else
     uint32_t r_dst = bits<11,7>(inst);
     uint32_t r_src = bits<19,15>(inst);
@@ -1056,6 +1270,9 @@ static void RV_XLEN_PREFIX(csrrs)(RiscvHartState *p_hart, uint32_t inst) {
 static void RV_XLEN_PREFIX(csrrc)(RiscvHartState *p_hart, uint32_t inst) {
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zicsr");
+#elif TTSIM_RV64_SYSTEM
+    uint32_t r_src = bits<19,15>(inst);
+    rv64_csr_op(p_hart, inst, r_src ? p_hart->x_regs[r_src] : 0, r_src != 0, 2);
 #else
     uint32_t r_dst = bits<11,7>(inst);
     TTSIM_VERIFY(!r_dst, UntestedFunctionality, "r_dst=%d", r_dst);
@@ -1077,6 +1294,8 @@ static void RV_XLEN_PREFIX(csrrc)(RiscvHartState *p_hart, uint32_t inst) {
 static void RV_XLEN_PREFIX(csrrwi)(RiscvHartState *p_hart, uint32_t inst) {
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zicsr");
+#elif TTSIM_RV64_SYSTEM
+    rv64_csr_op(p_hart, inst, bits<19,15>(inst), true, 0);
 #else
     TTSIM_ERROR_NOFMT(UntestedFunctionality);
     uint32_t r_dst = bits<11,7>(inst);
@@ -1096,6 +1315,9 @@ static void RV_XLEN_PREFIX(csrrwi)(RiscvHartState *p_hart, uint32_t inst) {
 static void RV_XLEN_PREFIX(csrrsi)(RiscvHartState *p_hart, uint32_t inst) {
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zicsr");
+#elif TTSIM_RV64_SYSTEM
+    uint32_t imm = bits<19,15>(inst);
+    rv64_csr_op(p_hart, inst, imm, imm != 0, 1);
 #else
     TTSIM_ERROR_NOFMT(UntestedFunctionality);
     uint32_t r_dst = bits<11,7>(inst);
@@ -1115,6 +1337,9 @@ static void RV_XLEN_PREFIX(csrrsi)(RiscvHartState *p_hart, uint32_t inst) {
 static void RV_XLEN_PREFIX(csrrci)(RiscvHartState *p_hart, uint32_t inst) {
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zicsr");
+#elif TTSIM_RV64_SYSTEM
+    uint32_t imm = bits<19,15>(inst);
+    rv64_csr_op(p_hart, inst, imm, imm != 0, 2);
 #else
     TTSIM_ERROR_NOFMT(UntestedFunctionality);
     uint32_t r_dst = bits<11,7>(inst);
@@ -1211,6 +1436,20 @@ static void RV_XLEN_PREFIX(c_slli)(RiscvHartState *p_hart, uint32_t inst) {
     p_hart->x_regs[r_dst] <<= imm;
 }
 
+static void RV_XLEN_PREFIX(c_fld)(RiscvHartState *p_hart, uint32_t inst) {
+    uint32_t r_base = 8 | bits<9,7>(inst);
+    uint32_t r_dst = 8 | bits<4,2>(inst);
+    uint32_t imm = (bits<12,10>(inst) << 3) | (bits<6,5>(inst) << 6);
+
+    uint_xlen_t addr = p_hart->x_regs[r_base] + imm;
+    uint64_t value;
+    if (!RV_XLEN_PREFIX(mem_rd)<uint64_t>(p_hart, addr, &value)) {
+        return;
+    }
+    p_hart->f_regs[r_dst] = value;
+    rv64_fpu_mark_dirty(p_hart);
+}
+
 static void RV_XLEN_PREFIX(c_addiw)(RiscvHartState *p_hart, uint32_t inst) {
     uint32_t r_dst = bits<11,7>(inst);
     int32_t imm = bits<6,2>(inst) | (signed_bits<12,12>(inst) << 5);
@@ -1218,6 +1457,36 @@ static void RV_XLEN_PREFIX(c_addiw)(RiscvHartState *p_hart, uint32_t inst) {
 
     uint32_t src = uint32_t(p_hart->x_regs[r_dst]);
     uint32_t value = src + imm;
+    p_hart->x_regs[r_dst] = int64_t(int32_t(value));
+}
+
+static void RV_XLEN_PREFIX(c_fldsp)(RiscvHartState *p_hart, uint32_t inst) {
+    uint32_t r_dst = bits<11,7>(inst);
+    uint32_t imm = (bits<6,5>(inst) << 3) | (bits<12,12>(inst) << 5) | (bits<4,2>(inst) << 6);
+
+    uint_xlen_t addr = p_hart->x_regs[X_SP] + imm;
+    uint64_t value;
+    if (!RV_XLEN_PREFIX(mem_rd)<uint64_t>(p_hart, addr, &value)) {
+        return;
+    }
+    p_hart->f_regs[r_dst] = value;
+    rv64_fpu_mark_dirty(p_hart);
+}
+
+static void RV_XLEN_PREFIX(c_lw)(RiscvHartState *p_hart, uint32_t inst) {
+    uint32_t r_base = 8 | bits<9,7>(inst);
+    uint32_t r_dst = 8 | bits<4,2>(inst);
+    uint32_t imm = (bits<6,6>(inst) << 2) | (bits<12,10>(inst) << 3) | (bits<5,5>(inst) << 6);
+
+    uint64_t addr = p_hart->x_regs[r_base] + imm;
+    uint32_t value;
+    if (!RV_XLEN_PREFIX(mem_rd)<uint32_t>(p_hart, addr, &value)) {
+#if TTSIM_RV64_SYSTEM
+        return;
+#else
+        TTSIM_ERROR(UnimplementedFunctionality, "mem_rd failed");
+#endif
+    }
     p_hart->x_regs[r_dst] = int64_t(int32_t(value));
 }
 
@@ -1229,6 +1498,23 @@ static void RV_XLEN_PREFIX(c_li)(RiscvHartState *p_hart, uint32_t inst) {
     p_hart->x_regs[r_dst] = imm;
 }
 
+static void RV_XLEN_PREFIX(c_lwsp)(RiscvHartState *p_hart, uint32_t inst) {
+    uint32_t r_dst = bits<11,7>(inst);
+    TTSIM_VERIFY(r_dst, UnimplementedFunctionality, "r_dst=%d", r_dst);
+    uint32_t imm = (bits<6,4>(inst) << 2) | (bits<12,12>(inst) << 5) | (bits<3,2>(inst) << 6);
+
+    uint_xlen_t addr = p_hart->x_regs[X_SP] + imm;
+    uint32_t value;
+    if (!RV_XLEN_PREFIX(mem_rd)<uint32_t>(p_hart, addr, &value)) {
+#if TTSIM_RV64_SYSTEM
+        return;
+#else
+        TTSIM_ERROR(UnimplementedFunctionality, "mem_rd failed");
+#endif
+    }
+    p_hart->x_regs[r_dst] = int64_t(int32_t(value));
+}
+
 static void RV_XLEN_PREFIX(c_ld)(RiscvHartState *p_hart, uint32_t inst) {
     uint32_t r_base = 8 | bits<9,7>(inst);
     uint32_t r_dst = 8 | bits<4,2>(inst);
@@ -1237,7 +1523,11 @@ static void RV_XLEN_PREFIX(c_ld)(RiscvHartState *p_hart, uint32_t inst) {
     uint_xlen_t addr = p_hart->x_regs[r_base] + imm;
     uint64_t value;
     if (!RV_XLEN_PREFIX(mem_rd)<uint64_t>(p_hart, addr, &value)) [[unlikely]] {
+#if TTSIM_RV64_SYSTEM
+        return;
+#else
         TTSIM_ERROR(UnimplementedFunctionality, "mem_rd failed");
+#endif
     }
     p_hart->x_regs[r_dst] = value;
 }
@@ -1278,41 +1568,52 @@ static void RV_XLEN_PREFIX(c_ldsp)(RiscvHartState *p_hart, uint32_t inst) {
 
 static void RV_XLEN_PREFIX(c_misc_alu)(RiscvHartState *p_hart, uint32_t inst) {
     uint32_t r_dst = 8 | bits<9,7>(inst);
-    if (bits<11,10>(inst) == 0) {
+    uint32_t sel = bits<11,10>(inst);
+    if ((sel == 0) || (sel == 1)) { // C.SRLI/C.SRAI
         uint32_t imm = bits<6,2>(inst) | (bits<12,12>(inst) << 5);
-        TTSIM_VERIFY(imm, UnimplementedFunctionality, "c_srli: imm=%d", imm);
-        p_hart->x_regs[r_dst] >>= imm;
-    } else if (bits<11,10>(inst) == 1) {
-        TTSIM_ERROR(UnimplementedFunctionality, "C.SRAI");
-    } else if (bits<11,10>(inst) == 2) {
-        TTSIM_ERROR(UnimplementedFunctionality, "C.ANDI");
+        TTSIM_VERIFY(imm, UnimplementedFunctionality, "c_sr*i: imm=%d", imm);
+        if (sel == 0) {
+            p_hart->x_regs[r_dst] >>= imm;
+        } else {
+            p_hart->x_regs[r_dst] = int_xlen_t(p_hart->x_regs[r_dst]) >> imm;
+        }
+    } else if (sel == 2) {
+        int32_t imm = bits<6,2>(inst) | (signed_bits<12,12>(inst) << 5);
+        p_hart->x_regs[r_dst] = int_xlen_t(p_hart->x_regs[r_dst]) & int_xlen_t(imm);
     } else { // inst[11:10] == 3
         uint32_t r_src = 8 | bits<4,2>(inst);
         if (!bits<12,12>(inst)) {
-            if (bits<6,5>(inst) == 2) { // C.OR
-                p_hart->x_regs[r_dst] |= p_hart->x_regs[r_src];
-                return;
+            switch (bits<6,5>(inst)) {
+                case 0: p_hart->x_regs[r_dst] -= p_hart->x_regs[r_src]; break;  // C.SUB
+                case 1: p_hart->x_regs[r_dst] ^= p_hart->x_regs[r_src]; break;  // C.XOR
+                case 2: p_hart->x_regs[r_dst] |= p_hart->x_regs[r_src]; break;  // C.OR
+                default: p_hart->x_regs[r_dst] &= p_hart->x_regs[r_src]; break; // C.AND
             }
         } else {
-            if (bits<6,5>(inst) == 1) { // C.ADDW
-                uint32_t src = p_hart->x_regs[r_src];
-                uint32_t dst = p_hart->x_regs[r_dst];
-                uint32_t value = dst + src;
-                p_hart->x_regs[r_dst] = int64_t(int32_t(value));
-                return;
+            uint32_t src = p_hart->x_regs[r_src];
+            uint32_t dst = p_hart->x_regs[r_dst];
+            switch (bits<6,5>(inst)) {
+                case 0: p_hart->x_regs[r_dst] = int64_t(int32_t(dst - src)); break; // C.SUBW
+                case 1: p_hart->x_regs[r_dst] = int64_t(int32_t(dst + src)); break; // C.ADDW
+                default: TTSIM_ERROR(UnimplementedFunctionality, "could not decode instruction inst=0x%x at pc=0x%llx", inst & 0xFFFF, uint64_t(p_hart->pc - 2));
             }
         }
-        TTSIM_ERROR(UnimplementedFunctionality, "could not decode instruction inst=0x%x at pc=0x%llx", inst & 0xFFFF, uint64_t(p_hart->pc - 2));
     }
 }
 
-static void RV_XLEN_PREFIX(c_mv_add)(RiscvHartState *p_hart, uint32_t inst) {
+static void RV_XLEN_PREFIX(c_jr_mv_ebreak_jalr_add)(RiscvHartState *p_hart, uint32_t inst) {
     uint32_t r_dst = bits<11,7>(inst);
     TTSIM_VERIFY(r_dst, UnimplementedFunctionality, "r_dst=%d", r_dst);
     uint32_t r_src = bits<6,2>(inst);
     if (bits<12,12>(inst)) {
-        TTSIM_VERIFY(r_src, UnimplementedFunctionality, "c_add: r_src=%d", r_src);
-        p_hart->x_regs[r_dst] += p_hart->x_regs[r_src];
+        if (r_src) { // C.ADD
+            p_hart->x_regs[r_dst] += p_hart->x_regs[r_src];
+        } else { // C.JALR
+            uint_xlen_t pc = p_hart->pc - 2; // pc is really pc_plus_2 here
+            uint_xlen_t target_pc = p_hart->x_regs[r_dst] & ~uint_xlen_t(1); // always clear LSB
+            p_hart->x_regs[1] = pc + 2;
+            branch_taken(p_hart, pc, target_pc);
+        }
     } else {
         if (r_src) { // C.MV
             p_hart->x_regs[r_dst] = p_hart->x_regs[r_src];
@@ -1321,6 +1622,17 @@ static void RV_XLEN_PREFIX(c_mv_add)(RiscvHartState *p_hart, uint32_t inst) {
             uint_xlen_t target_pc = p_hart->x_regs[r_dst] & ~uint_xlen_t(1); // always clear LSB
             branch_taken(p_hart, pc, target_pc);
         }
+    }
+}
+
+static void RV_XLEN_PREFIX(c_fsd)(RiscvHartState *p_hart, uint32_t inst) {
+    uint32_t r_base = 8 | bits<9,7>(inst);
+    uint32_t r_src = 8 | bits<4,2>(inst);
+    uint32_t imm = (bits<12,10>(inst) << 3) | (bits<6,5>(inst) << 6);
+
+    uint_xlen_t addr = p_hart->x_regs[r_base] + imm;
+    if (!RV_XLEN_PREFIX(mem_wr)<uint64_t>(p_hart, addr, p_hart->f_regs[r_src])) {
+        return;
     }
 }
 
@@ -1340,6 +1652,16 @@ static void RV_XLEN_PREFIX(c_j)(RiscvHartState *p_hart, uint32_t inst) {
     branch_taken(p_hart, pc, target_pc);
 }
 
+static void RV_XLEN_PREFIX(c_fsdsp)(RiscvHartState *p_hart, uint32_t inst) {
+    uint32_t r_src = bits<6,2>(inst);
+    uint32_t imm = (bits<12,10>(inst) << 3) | (bits<9,7>(inst) << 6);
+
+    uint_xlen_t addr = p_hart->x_regs[X_SP] + imm;
+    if (!RV_XLEN_PREFIX(mem_wr)<uint64_t>(p_hart, addr, p_hart->f_regs[r_src])) {
+        return;
+    }
+}
+
 static void RV_XLEN_PREFIX(c_sw)(RiscvHartState *p_hart, uint32_t inst) {
     uint32_t r_base = 8 | bits<9,7>(inst);
     uint32_t r_src = 8 | bits<4,2>(inst);
@@ -1348,7 +1670,45 @@ static void RV_XLEN_PREFIX(c_sw)(RiscvHartState *p_hart, uint32_t inst) {
     uint_xlen_t addr = p_hart->x_regs[r_base] + imm;
     uint_xlen_t value = p_hart->x_regs[r_src];
     if (!RV_XLEN_PREFIX(mem_wr)<uint32_t>(p_hart, addr, value)) [[unlikely]] {
+#if TTSIM_RV64_SYSTEM
+        return;
+#else
         TTSIM_ERROR(UnimplementedFunctionality, "mem_wr failed");
+#endif
+    }
+}
+
+static void RV_XLEN_PREFIX(c_beqz)(RiscvHartState *p_hart, uint32_t inst) {
+    uint32_t r_src = 8 | bits<9,7>(inst);
+    int32_t imm = 0;
+    imm |= bits<4,3>(inst) << 1;
+    imm |= bits<11,10>(inst) << 3;
+    imm |= bits<2,2>(inst) << 5;
+    imm |= bits<6,5>(inst) << 6;
+    imm |= signed_bits<12,12>(inst) << 8;
+
+    uint_xlen_t src = p_hart->x_regs[r_src];
+    uint_xlen_t pc = p_hart->pc - 2; // pc is really pc_plus_2 here
+    if (!src) {
+        uint_xlen_t target_pc = pc + int_xlen_t(imm);
+        branch_taken(p_hart, pc, target_pc);
+    } else {
+        branch_not_taken(p_hart, pc);
+    }
+}
+
+static void RV_XLEN_PREFIX(c_swsp)(RiscvHartState *p_hart, uint32_t inst) {
+    uint32_t r_src = bits<6,2>(inst);
+    uint32_t imm = (bits<12,9>(inst) << 2) | (bits<8,7>(inst) << 6);
+
+    uint_xlen_t addr = p_hart->x_regs[X_SP] + imm;
+    uint32_t value = uint32_t(p_hart->x_regs[r_src]);
+    if (!RV_XLEN_PREFIX(mem_wr)<uint32_t>(p_hart, addr, value)) {
+#if TTSIM_RV64_SYSTEM
+        return;
+#else
+        TTSIM_ERROR(UnimplementedFunctionality, "mem_wr failed");
+#endif
     }
 }
 
@@ -1360,7 +1720,11 @@ static void RV_XLEN_PREFIX(c_sd)(RiscvHartState *p_hart, uint32_t inst) {
     uint_xlen_t addr = p_hart->x_regs[r_base] + imm;
     uint_xlen_t value = p_hart->x_regs[r_src];
     if (!RV_XLEN_PREFIX(mem_wr)<uint64_t>(p_hart, addr, value)) [[unlikely]] {
+#if TTSIM_RV64_SYSTEM
+        return;
+#else
         TTSIM_ERROR(UnimplementedFunctionality, "mem_wr failed");
+#endif
     }
 }
 
@@ -1390,7 +1754,11 @@ static void RV_XLEN_PREFIX(c_sdsp)(RiscvHartState *p_hart, uint32_t inst) {
     uint_xlen_t addr = p_hart->x_regs[X_SP] + imm;
     uint_xlen_t value = p_hart->x_regs[r_src];
     if (!RV_XLEN_PREFIX(mem_wr)<uint64_t>(p_hart, addr, value)) [[unlikely]] {
+#if TTSIM_RV64_SYSTEM
+        return;
+#else
         TTSIM_ERROR(UnimplementedFunctionality, "mem_wr failed");
+#endif
     }
 }
 
@@ -1407,48 +1775,49 @@ static DecodeAndExecuteFunc s_decode_table[256] = {
 
 #if XLEN == 64
 static DecodeAndExecuteFunc s_rv64c_decode_table[32] = {
-    RV_XLEN_PREFIX(c_addi4spn),      // 000...00
-    RV_XLEN_PREFIX(c_addi),          // 000...01
-    RV_XLEN_PREFIX(c_slli),          // 000...10
-    RV_XLEN_PREFIX(unimplemented_c), // 000...11
+    RV_XLEN_PREFIX(c_addi4spn),              // 000...00
+    RV_XLEN_PREFIX(c_addi),                  // 000...01
+    RV_XLEN_PREFIX(c_slli),                  // 000...10
+    RV_XLEN_PREFIX(unimplemented_c),         // 000...11
 
-    RV_XLEN_PREFIX(unimplemented_c), // 001...00
-    RV_XLEN_PREFIX(c_addiw),         // 001...01
-    RV_XLEN_PREFIX(unimplemented_c), // 001...10
-    RV_XLEN_PREFIX(unimplemented_c), // 001...11
+    RV_XLEN_PREFIX(c_fld),                   // 001...00
+    RV_XLEN_PREFIX(c_addiw),                 // 001...01
+    RV_XLEN_PREFIX(c_fldsp),                 // 001...10
+    RV_XLEN_PREFIX(unimplemented_c),         // 001...11
 
-    RV_XLEN_PREFIX(unimplemented_c), // 010...00
-    RV_XLEN_PREFIX(c_li),            // 010...01
-    RV_XLEN_PREFIX(unimplemented_c), // 010...10
-    RV_XLEN_PREFIX(unimplemented_c), // 010...11
+    RV_XLEN_PREFIX(c_lw),                    // 010...00
+    RV_XLEN_PREFIX(c_li),                    // 010...01
+    RV_XLEN_PREFIX(c_lwsp),                  // 010...10
+    RV_XLEN_PREFIX(unimplemented_c),         // 010...11
 
-    RV_XLEN_PREFIX(c_ld),            // 011...00
-    RV_XLEN_PREFIX(c_addi16sp_lui),  // 011...01
-    RV_XLEN_PREFIX(c_ldsp),          // 011...10
-    RV_XLEN_PREFIX(unimplemented_c), // 011...11
+    RV_XLEN_PREFIX(c_ld),                    // 011...00
+    RV_XLEN_PREFIX(c_addi16sp_lui),          // 011...01
+    RV_XLEN_PREFIX(c_ldsp),                  // 011...10
+    RV_XLEN_PREFIX(unimplemented_c),         // 011...11
 
-    RV_XLEN_PREFIX(unimplemented_c), // 100...00
-    RV_XLEN_PREFIX(c_misc_alu),      // 100...01
-    RV_XLEN_PREFIX(c_mv_add),        // 100...10
-    RV_XLEN_PREFIX(unimplemented_c), // 100...11
+    RV_XLEN_PREFIX(unimplemented_c),         // 100...00
+    RV_XLEN_PREFIX(c_misc_alu),              // 100...01
+    RV_XLEN_PREFIX(c_jr_mv_ebreak_jalr_add), // 100...10
+    RV_XLEN_PREFIX(unimplemented_c),         // 100...11
 
-    RV_XLEN_PREFIX(unimplemented_c), // 101...00
-    RV_XLEN_PREFIX(c_j),             // 101...01
-    RV_XLEN_PREFIX(unimplemented_c), // 101...10
-    RV_XLEN_PREFIX(unimplemented_c), // 101...11
+    RV_XLEN_PREFIX(c_fsd),                   // 101...00
+    RV_XLEN_PREFIX(c_j),                     // 101...01
+    RV_XLEN_PREFIX(c_fsdsp),                 // 101...10
+    RV_XLEN_PREFIX(unimplemented_c),         // 101...11
 
-    RV_XLEN_PREFIX(c_sw),            // 110...00
-    RV_XLEN_PREFIX(unimplemented_c), // 110...01
-    RV_XLEN_PREFIX(unimplemented_c), // 110...10
-    RV_XLEN_PREFIX(unimplemented_c), // 110...11
+    RV_XLEN_PREFIX(c_sw),                    // 110...00
+    RV_XLEN_PREFIX(c_beqz),                  // 110...01
+    RV_XLEN_PREFIX(c_swsp),                  // 110...10
+    RV_XLEN_PREFIX(unimplemented_c),         // 110...11
 
-    RV_XLEN_PREFIX(c_sd),            // 111...00
-    RV_XLEN_PREFIX(c_bnez),          // 111...01
-    RV_XLEN_PREFIX(c_sdsp),          // 111...10
-    RV_XLEN_PREFIX(unimplemented_c), // 111...11
+    RV_XLEN_PREFIX(c_sd),                    // 111...00
+    RV_XLEN_PREFIX(c_bnez),                  // 111...01
+    RV_XLEN_PREFIX(c_sdsp),                  // 111...10
+    RV_XLEN_PREFIX(unimplemented_c),         // 111...11
 };
 #endif
 
+#if !TTSIM_RV64_SYSTEM
 void RV_XLEN_PREFIX(step)(RiscvHartState *p_hart) {
     uint_xlen_t pc = p_hart->pc;
     uint32_t inst;
@@ -1492,3 +1861,4 @@ void RV_XLEN_PREFIX(step)(RiscvHartState *p_hart) {
 #endif
     }
 }
+#endif

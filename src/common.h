@@ -89,5 +89,7 @@ template<class T> void mem_wr(void *p, T data) {
     memcpy(p, &data, sizeof(data));
 }
 
+const char *ttsim_error_category_name(TTSimErrorCategory category);
 void ttsim_printf(const char *fmt, ...);
 [[noreturn, gnu::cold]] void ttsim_error(TTSimErrorCategory category, const char *func, const char *fmt, ...);
+uint64_t ttsim_get_clock();

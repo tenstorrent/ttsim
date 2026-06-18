@@ -2233,7 +2233,6 @@ TENSIX_EXECUTE_PACR() {
                             }
 #if TT_ARCH_VERSION == 1
                         } else if (intermediate_format == 1) {
-                            TTSIM_ERROR(UntestedFunctionality, "fp32 to fp16 intermediate_format=1");
                             if ((value & 0x7FFFFFFF) > 0x7F800000) {
                                 value = (value & 0x80000000) | 0x7F800000;
                             }
@@ -2288,7 +2287,6 @@ TENSIX_EXECUTE_PACR() {
                 }
 #if TT_ARCH_VERSION == 1
                 if ((p_config->PCK_DEST_RD_CTRL_Read_32b_data == 1) && (intermediate_format == 1)) {
-                    TTSIM_ERROR(UntestedFunctionality, "fp32 to fp16 intermediate_format=1");
                     uint32_t s = value >> 18;
                     int32_t e = int32_t((value >> 10) & 255) - 112;
                     uint32_t m = value & 0x3FF;
@@ -3355,7 +3353,7 @@ static uint16_t sfpu_store_to_fp16(uint32_t x) {
 TENSIX_EXECUTE_SFPSTORE() {
     TTSIM_VERIFY(!(dest_reg_addr & 1), UnimplementedFunctionality, "dest_reg_addr=%d", dest_reg_addr);
     TTSIM_VERIFY(!instr_mod0 || (instr_mod0 == 2) || (instr_mod0 == 3) || (instr_mod0 == 4) || (instr_mod0 == 6) || (instr_mod0 == 7) ||
-                 (instr_mod0 == 12) || (instr_mod0 == 14) || (instr_mod0 == 15),
+                 (instr_mod0 == 9) || (instr_mod0 == 12) || (instr_mod0 == 14) || (instr_mod0 == 15),
         UnimplementedFunctionality, "instr_mod0=%d", instr_mod0);
     TTSIM_VERIFY(lreg_ind < 12, UnimplementedFunctionality, "lreg_ind=%d", lreg_ind); // note some of the constant LRegs can be stored
 
@@ -3401,6 +3399,8 @@ TENSIX_EXECUTE_SFPSTORE() {
             write_dst16b(p_tensix, row, col, value & 0xFFFF);
         } else if (instr_mod0 == 7) {
             write_dst32b(p_tensix, row, col, value);
+        } else if (instr_mod0 == 9) {
+            write_dst32b(p_tensix, row, col, (value << 16) | (value >> 16));
         } else if (instr_mod0 == 12) {
 #if TT_ARCH_VERSION == 0
             if (value & 0x80000000) {

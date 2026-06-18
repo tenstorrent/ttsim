@@ -154,6 +154,16 @@
       "base": "0x58000",
       "limit": "0x58FFF",
       "name": "arc_apb_niu1"
+    },
+    {
+      "base": "0x100000000",
+      "limit": "0x1000FFFFF",
+      "name": "dram_apb"
+    },
+    {
+      "base": "0x80000",
+      "limit": "0xAFFFF",
+      "name": "dram_apb_niu"
     }
   ],
   "regs": [
