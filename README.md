@@ -125,6 +125,34 @@ sudo insmod tenstorrent.ko
 
 Quasar's host MMIO path is not implemented in libttsim and will not work end-to-end.
 
+## Full-System Simulation with ttsim-riscv64
+Where the `libttsim.so` path models a Tenstorrent *chip*, **ttsim-riscv64** is the other face of
+the simulator: a full-system simulator of an entire RISC-V computer that boots OpenSBI and the Linux
+kernel (including up to 16 harts for SMP), all the way to an Ubuntu userspace shell, in approximately
+1 minute. It is not a Tenstorrent chip: it is built with `-DTTSIM_RV64_SYSTEM=1` and leverages the
+shared, tiny, efficient (>200 MIPS) RISC-V interpreter core already built into `ttsim`.
+
+Build:
+```bash
+./make.py src/_out/release_riscv64/ttsim
+```
+
+Boot Linux (OpenSBI `fw_jump` firmware + a kernel `Image` + initramfs + a flattened device tree), e.g.
+a boot with a virtio-blk disk and an interactive console:
+```bash
+src/_out/release_riscv64/ttsim -i \
+    --entry 0x80000000 --set-reg a0 0 --set-reg a1 0x88800000 \
+    --load-bin fw_jump.bin 0x80000000 --load-bin Image      0x80200000 \
+    --load-bin initrd.img  0x84000000 --load-bin board.dtb  0x88800000 \
+    --disk disk.img
+```
+
+`-i` attaches the simulated UART console to your terminal. Ctrl-C is hooked and passed into the
+simulator, so use Ctrl-\ if you need to forcibly exit.
+
+`--harts N` can be used to select the number of harts, but this support is experimental and not
+fully validated. Note that your .dtb must declare more harts in order for Linux to use them.
+
 ## Known Issues
 **Fast dispatch is not sufficiently tested**. It is believed to be fully functional, but run-to-run
 determinism has not been adequately characterized, and simulations may take longer to run than under
