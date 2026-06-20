@@ -156,6 +156,18 @@ extern "C" API_EXPORT void libttsim_init() {
         s_ttsim_semihosting = true;
     }
     ttsim_init();
+    for (uint32_t d = 0; d < NUM_MMIO_CHIPS; d++) {
+        // Each MMIO device's BARs live in its own host-physical window (see PER_DEVICE_PADDR_STRIDE).
+        uint64_t off = uint64_t(d) * PER_DEVICE_PADDR_STRIDE;
+        PcieTile *p_tile = &g_chips[d].p_tile;
+        p_tile->pci_cfg_bar0_lo = uint32_t(BAR0_BASE + off) | 0x4; // BAR0: 64-bit memory, not prefetchable
+        p_tile->pci_cfg_bar0_hi = uint32_t((BAR0_BASE + off) >> 32);
+        p_tile->pci_cfg_bar2_lo = uint32_t(BAR2_BASE + off) | 0x4; // BAR2
+        p_tile->pci_cfg_bar2_hi = uint32_t((BAR2_BASE + off) >> 32);
+        p_tile->pci_cfg_bar4_lo = uint32_t(BAR4_BASE + off) | 0x4; // BAR4
+        p_tile->pci_cfg_bar4_hi = uint32_t((BAR4_BASE + off) >> 32);
+        p_tile->pci_cfg_interrupt_line_pin = 0xFF; // interrupt line=0xFF, pin=0 (no INTx)
+    }
     s_ttsim_running = true;
 }
 
@@ -175,23 +187,49 @@ extern "C" API_EXPORT void libttsim_set_pci_dma_mem_callbacks(
 }
 
 static uint32_t pci_config_rd32(uint32_t device, uint32_t offset) {
-    // Each MMIO device's BARs live in its own host-physical window (see PER_DEVICE_PADDR_STRIDE).
-    [[maybe_unused]] uint64_t bar_off = uint64_t(device) * PER_DEVICE_PADDR_STRIDE;
     switch (offset) {
 #if TT_ARCH_VERSION == 0
         case 0x0: return 0x1E52 | (0x401E << 16); // vendor ID, device ID
 #elif TT_ARCH_VERSION == 1
         case 0x0: return 0x1E52 | (0xB140 << 16); // vendor ID, device ID
 #endif
+        case 0x04: return g_chips[device].p_tile.pci_cfg_command_status;
         case 0x08: return 0x12000000 | REVISION_ID;  // class code, subclass, prog-if, revision ID
-        case 0x10: return 0x4 | uint32_t(BAR0_BASE + bar_off); // 64-bit, not prefetchable (?), low address bits
-        case 0x14: return uint32_t((BAR0_BASE + bar_off) >> 32); // high address bits
-        case 0x18: return 0x4 | uint32_t(BAR2_BASE + bar_off); // 64-bit, not prefetchable (?), low address bits
-        case 0x1C: return uint32_t((BAR2_BASE + bar_off) >> 32); // high address bits
-        case 0x20: return 0x4 | uint32_t(BAR4_BASE + bar_off); // 64-bit, not prefetchable (?), low address bits
-        case 0x24: return uint32_t((BAR4_BASE + bar_off) >> 32); // high address bits
+        case 0x0C: return g_chips[device].p_tile.pci_cfg_cache_latency_header;
+        case 0x10: return g_chips[device].p_tile.pci_cfg_bar0_lo;
+        case 0x14: return g_chips[device].p_tile.pci_cfg_bar0_hi;
+        case 0x18: return g_chips[device].p_tile.pci_cfg_bar2_lo;
+        case 0x1C: return g_chips[device].p_tile.pci_cfg_bar2_hi;
+        case 0x20: return g_chips[device].p_tile.pci_cfg_bar4_lo;
+        case 0x24: return g_chips[device].p_tile.pci_cfg_bar4_hi;
+        case 0x28: return 0; // cardbus CIS pointer (none)
+        case 0x2C: return 0; // subsystem vendor/device (non-Galaxy)
+        case 0x30: return 0; // expansion ROM pointer (none)
+        case 0x34: return 0; // capabilities pointer (none)
+        case 0x38: return 0; // reserved
+        case 0x3C: return g_chips[device].p_tile.pci_cfg_interrupt_line_pin;
         default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
     }
+}
+
+static void pci_config_wr32(uint32_t device, uint32_t offset, uint32_t data) {
+    PcieTile *p_tile = &g_chips[device].p_tile;
+    uint32_t *p_reg;
+    uint32_t write_mask;
+    switch (offset) {
+        case 0x04: p_reg = &p_tile->pci_cfg_command_status; write_mask = 0xFFFF; break;
+        case 0x0C: p_reg = &p_tile->pci_cfg_cache_latency_header; write_mask = 0xFFFF; break;
+        case 0x10: p_reg = &p_tile->pci_cfg_bar0_lo; write_mask = uint32_t(~(uint64_t(BAR0_SIZE) - 1)); break;
+        case 0x14: p_reg = &p_tile->pci_cfg_bar0_hi; write_mask = uint32_t(~((uint64_t(BAR0_SIZE) - 1) >> 32)); break;
+        case 0x18: p_reg = &p_tile->pci_cfg_bar2_lo; write_mask = uint32_t(~(uint64_t(BAR2_SIZE) - 1)); break;
+        case 0x1C: p_reg = &p_tile->pci_cfg_bar2_hi; write_mask = uint32_t(~((uint64_t(BAR2_SIZE) - 1) >> 32)); break;
+        case 0x20: p_reg = &p_tile->pci_cfg_bar4_lo; write_mask = uint32_t(~(uint64_t(BAR4_SIZE) - 1)); break;
+        case 0x24: p_reg = &p_tile->pci_cfg_bar4_hi; write_mask = uint32_t(~((uint64_t(BAR4_SIZE) - 1) >> 32)); break;
+        case 0x30: return; // expansion ROM is write-ignore
+        case 0x3C: p_reg = &p_tile->pci_cfg_interrupt_line_pin; write_mask = 0xFF; break;
+        default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
+    }
+    *p_reg = (*p_reg & ~write_mask) | (data & write_mask);
 }
 
 extern "C" API_EXPORT uint32_t libttsim_pci_config_rd32(uint32_t bus_device_function, uint32_t offset) {
@@ -209,9 +247,13 @@ extern "C" API_EXPORT uint32_t libttsim_pci_config_rd32(uint32_t bus_device_func
 
 extern "C" API_EXPORT void libttsim_pci_config_wr32(uint32_t bus_device_function, uint32_t offset, uint32_t data) {
     TTSIM_VERIFY(s_ttsim_running, ConfigurationError, "sim is not running");
-    TTSIM_VERIFY(!bus_device_function, UndefinedBehavior, "bus_device_function=0x%x", bus_device_function);
+    uint32_t function = bus_device_function & 7;
+    uint32_t device = (bus_device_function >> 3) & 0x1F;
+    uint32_t bus = bus_device_function >> 8; // normally only 8 bits, but validate none of these are set
+    TTSIM_VERIFY(!bus && !function, UndefinedBehavior, "bus_device_function=0x%x", bus_device_function);
     TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
-    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+    TTSIM_VERIFY(device < NUM_MMIO_CHIPS, UndefinedBehavior, "invalid device=%d", device);
+    pci_config_wr32(device, offset, data);
 }
 
 struct TlbTarget {

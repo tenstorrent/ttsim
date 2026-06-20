@@ -66,8 +66,6 @@ int main(int argc, char **argv) {
     const char *inject_file = nullptr;
     uint64_t inject_at = 0;
     const char *tt_path = nullptr;
-    uint64_t tt_ecam = 0x30000000ull;
-    uint64_t tt_clock_burst = 0;
 
     // Bounds-checked option-argument accessor
     auto val = [&](int k) -> const char * {
@@ -116,10 +114,6 @@ int main(int argc, char **argv) {
             inject_file = val(++i);
         } else if (!strcmp(a, "--tt-device")) {
             tt_path = val(++i);
-        } else if (!strcmp(a, "--tt-ecam")) {
-            tt_ecam = parse_u64(val(++i));
-        } else if (!strcmp(a, "--tt-clock-burst")) {
-            tt_clock_burst = parse_u64(val(++i));
         } else {
             TTSIM_ERROR(ConfigurationError, "unknown argument '%s'", a);
         }
@@ -128,8 +122,7 @@ int main(int argc, char **argv) {
     RvSystem *sys = rv64_sys_create(dram_base, dram_size, num_harts, timer_insns_per_tick);
     Rv64SysHartState *h0 = rv64_sys_hart(sys, 0);
     if (tt_path) {
-        TTSIM_VERIFY(rv64_sys_tt_attach(sys, tt_path, tt_ecam, tt_clock_burst),
-            ConfigurationError, "--tt-device: failed to attach '%s'", tt_path);
+        rv64_sys_tt_attach(sys, tt_path);
     }
     if (disk_path) {
         rv64_sys_set_disk(sys, disk_path);

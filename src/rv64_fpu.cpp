@@ -605,7 +605,7 @@ static uint64_t hostfp_from_int_d(uint64_t xr, uint32_t r2, uint32_t rm, uint32_
 }
 
 void rv64_fpu_op(Rv64SysHartState *h, uint32_t inst) {
-    if (fp_off(h)) { // C7
+    if (fp_off(h)) {
         return rv64_sys_raise(h, EXC_ILLEGAL_INST, inst);
     }
     uint32_t funct7 = bits<31,25>(inst);
@@ -614,7 +614,7 @@ void rv64_fpu_op(Rv64SysHartState *h, uint32_t inst) {
     uint32_t r1 = bits<19,15>(inst);
     uint32_t r2 = bits<24,20>(inst);
     bool is_double = funct7 & 1; // fmt: 00=S, 01=D
-    // C8: reject reserved funct3/rs2/funct7 encodings before mutating any FP state.
+    // Reject reserved funct3/rs2/funct7 encodings before mutating any FP state.
     if (!rv64_fpu_op_encoding_ok(funct7, funct3, r2)) {
         return rv64_sys_raise(h, EXC_ILLEGAL_INST, inst);
     }

@@ -12,7 +12,7 @@ struct RvSystem; // the board (DRAM + devices), defined in rv64_system.cpp
 
 #define DTLB_N 16u
 #define L2TLB_N 128u
-#define TLB_VALID_BIT (1ULL << 63)
+#define TLB_VALID_BIT (1ull << 63)
 #define TLB_INVALID_VPN UINT64_MAX
 
 struct TlbEntry {
@@ -91,15 +91,15 @@ struct Rv64SysHartState {
     uint64_t steps_left;
 };
 
-static inline uint8_t *rv64_dtlb_host(Rv64SysHartState *h, uint64_t vaddr, uint32_t size, bool is_store) {
+static inline uint8_t *rv64_dtlb_host(Rv64SysHartState *p_hart, uint64_t vaddr, uint32_t size, bool is_store) {
     if ((uint32_t(vaddr) & (size - 1)) != 0) {
         return nullptr; // misaligned
     }
     if (((uint32_t(vaddr) & 0xFFF) + size) > 0x1000) {
-        return nullptr; // crosses a page
+        return nullptr; // crosses a page -- XXX alignment check should be sufficient here to avoid?
     }
     uint64_t vpn = vaddr >> 12;
-    auto *e = is_store ? &h->dtlb_store[vpn & (DTLB_N-1)] : &h->dtlb_load[vpn & (DTLB_N-1)];
+    auto *e = is_store ? &p_hart->dtlb_store[vpn & (DTLB_N-1)] : &p_hart->dtlb_load[vpn & (DTLB_N-1)];
     if (e->vpn == vpn) [[likely]] {
         return e->host_page + (uint32_t(vaddr) & 0xFFF);
     }
@@ -121,10 +121,10 @@ bool rv64_sys_in_dram(RvSystem *p_sys, uint64_t paddr, uint64_t size);
 
 uint64_t rv64_sys_read_csr(Rv64SysHartState *p_hart, uint32_t csr, bool *ok);
 void rv64_sys_write_csr(Rv64SysHartState *p_hart, uint32_t csr, uint64_t val, bool *ok);
-void rv64_sys_raise(Rv64SysHartState *p_hart, uint64_t cause, uint64_t tval); // record a synchronous trap
+void rv64_sys_raise(Rv64SysHartState *p_hart, uint64_t cause, uint64_t tval);
 void rv64_sys_take_trap(Rv64SysHartState *p_hart, uint64_t cause, uint64_t tval, uint64_t epc);
-void rv64_sys_xret(Rv64SysHartState *p_hart, bool from_machine); // mret / sret
-void rv64_sys_sfence(Rv64SysHartState *p_hart, uint64_t vaddr, uint64_t asid); // SFENCE.VMA (TLB flush)
+void rv64_sys_xret(Rv64SysHartState *p_hart, bool from_machine);
+void rv64_sys_sfence(Rv64SysHartState *p_hart, uint64_t vaddr, uint64_t asid);
 
 RvSystem *rv64_sys_create(uint64_t dram_base, uint64_t dram_size, uint32_t num_harts,
                           uint32_t timer_insns_per_tick);
@@ -139,4 +139,4 @@ void rv64_sys_set_irq(RvSystem *p_sys, uint32_t source, bool level);
 void rv64_sys_set_interactive(RvSystem *p_sys);
 void rv64_sys_set_hart_quantum(RvSystem *p_sys, uint32_t q);
 void rv64_sys_uart_inject(RvSystem *p_sys, uint64_t at, const uint8_t *data, size_t len);
-bool rv64_sys_tt_attach(RvSystem *p_sys, const char *path, uint64_t ecam_base, uint64_t clock_burst);
+void rv64_sys_tt_attach(RvSystem *p_sys, const char *path);

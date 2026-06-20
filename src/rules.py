@@ -100,6 +100,7 @@ def rules(ctx):
             *compile_opts,
             *config_compile_opts[config],
             '-DTTSIM_RV64_SYSTEM=1',
+            '-frounding-math', # for hostfp, do not assume the default rounding mode
         ]
         c_files = ['main.cpp', 'common.cpp', 'rv64_fpu.cpp', 'rv64_system.cpp']
         o_files = []
@@ -107,7 +108,7 @@ def rules(ctx):
             o_file = f'{out_dir}/{file.replace(".cpp", ".o")}'
             d_file = o_file.replace('.o', '.d')
             cmd = ['g++', *gcc_opts, '-c', file, '-o', o_file]
-            ctx.rule(o_file, file, cmd=cmd, depfile=d_file)
+            ctx.rule(o_file, file, cmd=cmd, depfile=d_file, order_only_inputs=gen_h_files)
             o_files += [o_file]
         target = f'{out_dir}/ttsim'
         cmd = ['g++', *o_files, '-o', target]

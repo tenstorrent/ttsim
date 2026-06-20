@@ -35,6 +35,8 @@
 #define VIRTIO_SIZE  0x00008000ull
 #define RESET_ROM_BASE 0x00001000ull
 #define RESET_ROM_SIZE 0x00001000ull
+#define TT_ECAM_BASE 0x30000000ull
+#define TT_ECAM_SIZE 0x100000ull // one PCI bus: 32 devices x 8 functions x 4 KiB
 
 #define PLIC_NDEV 53
 
@@ -42,6 +44,8 @@
 #define INTERACTIVE_SERIAL_POLL_INSNS 65536
 
 #define RTC_BASE_NS 946684800000000000ull // 2000-01-01
+
+#define TT_CLOCK_BURST 256
 
 #define VIO_MAGIC 0x74726976u
 #define VIRTIO_BLK_T_IN 0
@@ -86,11 +90,11 @@ struct RvSystem {
     uint64_t dram_size;
     uint8_t reset_rom[RESET_ROM_SIZE];
     uint32_t num_harts;
-    uint32_t hart_quantum;
+    uint32_t hart_quantum; // SMP round-robin slice (instructions per hart before yielding)
     uint32_t timer_insns_per_tick; // mtime advances once per this many retired instructions
-    uint64_t insn_count;
-    uint64_t visible_icount;
-    uint64_t cause12_count;
+    uint64_t insn_count; // all instructions executed (excludes a faulting fetch)
+    uint64_t visible_icount; // retired (drives mtime; includes cause-12 inst-page faults)
+    uint64_t cause12_count; // cause-12 inst-page faults; cycle/instret == visible - this
 
     Rv64SysHartState harts[MAX_HARTS];
 
@@ -126,10 +130,23 @@ struct RvSystem {
     uint32_t plic_enable[2 * MAX_HARTS][2];
     uint32_t plic_threshold[2 * MAX_HARTS];
     uint32_t plic_claimed[2];
+
+    bool tt_active;
+    uint64_t tt_bar_base[3];
+    uint64_t tt_bar_size[3];
 };
 
 RvSystem g_sys;
 static Uart16550 *s_interactive_uart = nullptr;
+static void *s_tt_handle;
+static void (*s_tt_init)();
+static void (*s_tt_clock)(uint32_t);
+static uint32_t (*s_tt_cfg_rd)(uint32_t, uint32_t);
+static void (*s_tt_cfg_wr)(uint32_t, uint32_t, uint32_t);
+static void (*s_tt_mem_rd)(uint64_t, void *, uint32_t);
+static void (*s_tt_mem_wr)(uint64_t, const void *, uint32_t);
+static void (*s_tt_set_dma_cb)(void (*)(uint64_t, void *, uint32_t),
+                               void (*)(uint64_t, const void *, uint32_t));
 
 uint64_t ttsim_get_clock() {
     return g_sys.insn_count; // use retired instruction count for prints/errors
@@ -160,20 +177,21 @@ static inline void tlb_flush(Rv64SysHartState *p_hart) {
 RvSystem *rv64_sys_create(uint64_t dram_base, uint64_t dram_size, uint32_t num_harts,
                           uint32_t timer_insns_per_tick) {
     TTSIM_VERIFY((num_harts >= 1) && (num_harts <= MAX_HARTS), ConfigurationError, "num_harts=%u", num_harts);
-    memset(&g_sys, 0, sizeof(g_sys));
-    g_sys.dram_base = dram_base;
-    g_sys.dram_size = dram_size;
-    g_sys.num_harts = num_harts;
-    g_sys.hart_quantum = 100;
-    g_sys.timer_insns_per_tick = timer_insns_per_tick;
-    g_sys.dram = (uint8_t *)mmap(nullptr, dram_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    TTSIM_VERIFY(g_sys.dram != MAP_FAILED, SystemError, "failed to allocate %llu bytes of guest DRAM", dram_size);
+    RvSystem *p_sys = &g_sys;
+    memset(p_sys, 0, sizeof(*p_sys));
+    p_sys->dram_base = dram_base;
+    p_sys->dram_size = dram_size;
+    p_sys->num_harts = num_harts;
+    p_sys->hart_quantum = 100;
+    p_sys->timer_insns_per_tick = timer_insns_per_tick;
+    p_sys->dram = (uint8_t *)mmap(nullptr, dram_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    TTSIM_VERIFY(p_sys->dram != MAP_FAILED, SystemError, "failed to allocate %llu bytes of guest DRAM", dram_size);
     for (uint32_t i = 0; i < MAX_HARTS; i++) {
-        g_sys.mtimecmp[i] = ~0ull; // CLINT mtimecmp resets to all-ones (no timer alarm pending)
+        p_sys->mtimecmp[i] = ~0ull; // CLINT mtimecmp resets to all-ones (no timer alarm pending)
     }
     for (uint32_t i = 0; i < num_harts; i++) {
-        Rv64SysHartState *p_hart = &g_sys.harts[i];
-        p_hart->p_sys = &g_sys;
+        Rv64SysHartState *p_hart = &p_sys->harts[i];
+        p_hart->p_sys = p_sys;
         p_hart->hart_id = i;
         p_hart->priv = PRIV_M;
         tlb_flush_l1(p_hart);
@@ -184,7 +202,7 @@ RvSystem *rv64_sys_create(uint64_t dram_base, uint64_t dram_size, uint32_t num_h
         p_hart->misa = (2ull << 62) | ext;
         p_hart->mstatus = MSTATUS_UXL | MSTATUS_SXL; // 64-bit S/U
     }
-    return &g_sys;
+    return p_sys;
 }
 
 Rv64SysHartState *rv64_sys_hart(RvSystem *p_sys, uint32_t hart_id) {
@@ -237,77 +255,76 @@ static inline uint64_t mtime_now(const RvSystem *p_sys) {
     return p_sys->visible_icount / p_sys->timer_insns_per_tick;
 }
 
-static uint64_t clint_read(RvSystem *sys, uint32_t offset, uint32_t size) {
+static uint64_t clint_read(RvSystem *p_sys, uint32_t offset, uint32_t size) {
     TTSIM_VERIFY((size == 4) || (size == 8), UnimplementedFunctionality, "size=%d", size);
     TTSIM_VERIFY(!(offset & (size - 1)), UnimplementedFunctionality, "misaligned offset=0x%x", offset);
     if ((offset >= 0x4000) && (offset < 0x4000 + 8 * MAX_HARTS)) {
-        uint64_t v = sys->mtimecmp[(offset - 0x4000) / 8];
+        uint64_t v = p_sys->mtimecmp[(offset - 0x4000) / 8];
         return (size == 4 && (offset & 4)) ? (v >> 32) : v;
     }
     if ((offset >= 0xBFF8) && (offset < 0xC000)) {
-        uint64_t mt = mtime_now(sys);
+        uint64_t mt = mtime_now(p_sys);
         return (size == 4 && (offset & 4)) ? (mt >> 32) : mt;
     }
     if (offset < 4 * MAX_HARTS) {
-        return sys->msip[offset / 4];
+        return p_sys->msip[offset / 4];
     }
     TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
 }
 
-static void clint_write(RvSystem *sys, uint32_t offset, uint32_t size, uint64_t val) {
+static void clint_write(RvSystem *p_sys, uint32_t offset, uint32_t size, uint64_t val) {
     TTSIM_VERIFY((size == 4) || (size == 8), UnimplementedFunctionality, "size=%d", size);
     TTSIM_VERIFY(!(offset & (size - 1)), UnimplementedFunctionality, "misaligned offset=0x%x", offset);
     if ((offset >= 0x4000) && (offset < 0x4000 + 8 * MAX_HARTS)) {
-        uint64_t *p = &sys->mtimecmp[(offset - 0x4000) / 8];
+        uint64_t *p = &p_sys->mtimecmp[(offset - 0x4000) / 8];
         if (size == 4) {
             *p = (offset & 4) ? ((*p & 0xFFFFFFFFull) | (val << 32)) : ((*p & ~0xFFFFFFFFull) | uint32_t(val));
         } else {
             *p = val;
         }
-        clint_refresh_irq(&sys->harts[(offset - 0x4000) / 8]);
+        clint_refresh_irq(&p_sys->harts[(offset - 0x4000) / 8]); // mtimecmp changed -> re-latch MTIP
         return;
     }
     if ((offset >= 0xBFF8) && (offset < 0xC000)) {
-        return;
+        return; // ignore writes to mtime
     }
     if (offset < 4 * MAX_HARTS) {
         uint32_t hart_id = uint32_t(offset / 4);
-        sys->msip[hart_id] = val & 1;
-        if ((hart_id < sys->num_harts) && (val & 1) && sys->active_hart && (sys->active_hart->hart_id != hart_id)) {
-            sys->yield_hart = hart_id;
-            sys->active_hart->steps_left = 0;
+        p_sys->msip[hart_id] = val & 1;
+        if ((hart_id < p_sys->num_harts) && (val & 1) && p_sys->active_hart && (p_sys->active_hart->hart_id != hart_id)) {
+            p_sys->yield_hart = hart_id; // yield immediately to target hart on IPI
+            p_sys->active_hart->steps_left = 0;
         }
-        clint_refresh_irq(&sys->harts[hart_id]); // MSIP changed -> re-latch + reschedule
+        clint_refresh_irq(&p_sys->harts[hart_id]); // MSIP changed -> re-latch + reschedule
         return;
     }
     TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
 }
 
-static void uart_update_irq(RvSystem *sys) {
-    Uart16550 *u = &sys->uart;
-    // RX-data-available (IER bit 0) outranks THR-empty (IER bit 1)
+static void uart_update_irq(RvSystem *p_sys) {
+    Uart16550 *u = &p_sys->uart;
     bool pending = ((u->ier & 0x01) && u->rx_count) || ((u->ier & 0x02) && u->thr_ipending);
-    rv64_sys_set_irq(sys, UART_IRQ, pending);
+    rv64_sys_set_irq(p_sys, UART_IRQ, pending);
 }
 
-[[maybe_unused]] static bool uart_rx_push(RvSystem *sys, uint8_t v) {
-    Uart16550 *u = &sys->uart;
+static bool uart_rx_push(RvSystem *p_sys, uint8_t v) {
+    Uart16550 *u = &p_sys->uart;
     if (u->rx_count == UART_RX_FIFO_SIZE) {
         return false;
     }
     u->rx_fifo[u->rx_tail] = v;
     u->rx_tail = (u->rx_tail + 1) % UART_RX_FIFO_SIZE;
     u->rx_count++;
-    uart_update_irq(sys);
+    uart_update_irq(p_sys);
     return true;
 }
 
-static uint8_t uart_rx_pop(RvSystem *sys) {
-    Uart16550 *u = &sys->uart;
+static uint8_t uart_rx_pop(RvSystem *p_sys) {
+    Uart16550 *u = &p_sys->uart;
     uint8_t v = u->rx_fifo[u->rx_head];
     u->rx_head = (u->rx_head + 1) % UART_RX_FIFO_SIZE;
     u->rx_count--;
-    uart_update_irq(sys);
+    uart_update_irq(p_sys);
     return v;
 }
 
@@ -320,15 +337,15 @@ static uint64_t uart_read(RvSystem *p_sys, uint32_t offset) {
             }
             return u->rx_count ? uart_rx_pop(p_sys) : 0;
         case 1: return (u->lcr & 0x80) ? u->dlm : u->ier;
-        case 2: {
-            uint8_t fifo = (u->fcr & 0x01) ? 0xc0 : 0x00;
+        case 2: { // IIR
+            uint8_t fifo = (u->fcr & 0x01) ? 0xC0 : 0x00;
             if ((u->ier & 0x01) && u->rx_count) {
-                return fifo | 0x04;
+                return fifo | 0x04; // RX data available
             }
             if (u->thr_ipending && (u->ier & 0x02)) {
                 u->thr_ipending = false;
                 uart_update_irq(p_sys);
-                return fifo | 0x02;
+                return fifo | 0x02; // THR empty
             }
             return fifo | 0x01; // no interrupt pending
         }
@@ -413,14 +430,14 @@ static void interactive_serial_enable(Uart16550 *u) {
     atexit(interactive_serial_restore);
 }
 
-static void interactive_serial_poll(RvSystem *sys) {
-    Uart16550 *u = &sys->uart;
+static void interactive_serial_poll(RvSystem *p_sys) {
+    Uart16550 *u = &p_sys->uart;
     uint8_t buf[256];
     while (u->rx_count < UART_RX_FIFO_SIZE) {
         ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
         if (n > 0) {
             for (ssize_t i = 0; i < n; i++) {
-                if (!uart_rx_push(sys, buf[i] == '\n' ? '\r' : buf[i])) { // guest TTYs expect CR
+                if (!uart_rx_push(p_sys, buf[i] == '\n' ? '\r' : buf[i])) { // guest TTYs expect CR
                     break;
                 }
             }
@@ -433,25 +450,25 @@ static void interactive_serial_poll(RvSystem *sys) {
     }
 }
 
-static void interactive_serial_poll_if_due(RvSystem *sys) {
-    Uart16550 *u = &sys->uart;
-    if (!u->interactive || (sys->visible_icount < u->interactive_next_poll)) {
+static void interactive_serial_poll_if_due(RvSystem *p_sys) {
+    Uart16550 *u = &p_sys->uart;
+    if (!u->interactive || (p_sys->visible_icount < u->interactive_next_poll)) {
         return;
     }
-    u->interactive_next_poll = sys->visible_icount + INTERACTIVE_SERIAL_POLL_INSNS;
-    interactive_serial_poll(sys);
+    u->interactive_next_poll = p_sys->visible_icount + INTERACTIVE_SERIAL_POLL_INSNS;
+    interactive_serial_poll(p_sys);
 }
 
 // Deterministic scripted input: once the guest has retired inject_at instructions, drain inject_data
 // into the RX FIFO (over multiple calls if the FIFO fills). '\n' is normalized to CR like a real TTY.
-static void uart_inject_pump(RvSystem *sys) {
-    Uart16550 *u = &sys->uart;
-    if (!u->inject_enabled || (sys->insn_count < u->inject_at)) {
+static void uart_inject_pump(RvSystem *p_sys) {
+    Uart16550 *u = &p_sys->uart;
+    if (!u->inject_enabled || (p_sys->insn_count < u->inject_at)) {
         return;
     }
     while ((u->inject_pos < u->inject_len) && (u->rx_count < UART_RX_FIFO_SIZE)) {
         uint8_t ch = u->inject_data[u->inject_pos++];
-        uart_rx_push(sys, ch == '\n' ? '\r' : ch);
+        uart_rx_push(p_sys, ch == '\n' ? '\r' : ch);
     }
     if (u->inject_pos == u->inject_len) {
         u->inject_enabled = false;
@@ -505,37 +522,37 @@ static void plic_update(RvSystem *p_sys) {
     }
 }
 
-static uint64_t plic_read(RvSystem *sys, uint32_t offset) {
+static uint64_t plic_read(RvSystem *p_sys, uint32_t offset) {
     TTSIM_VERIFY(!(offset & 3), UnimplementedFunctionality, "misaligned offset=0x%x", offset);
     if (offset < 0x1000) {
-        return sys->plic_priority[offset / 4];
+        return p_sys->plic_priority[offset / 4];
     }
     if ((offset >= 0x1000) && (offset < 0x1080)) {
-        return sys->plic_pending[(offset - 0x1000) / 4];
+        return p_sys->plic_pending[(offset - 0x1000) / 4];
     }
     if ((offset >= 0x2000) && (offset < 0x2000 + 0x80 * 2 * MAX_HARTS)) {
         uint32_t ctx = (offset - 0x2000) / 0x80;
         uint32_t w = ((offset - 0x2000) % 0x80) / 4;
-        return (ctx < plic_num_contexts(sys) && w < 2) ? sys->plic_enable[ctx][w] : 0;
+        return ((ctx < plic_num_contexts(p_sys)) && (w < 2)) ? p_sys->plic_enable[ctx][w] : 0;
     }
     if (offset >= 0x200000) {
         uint32_t ctx = (offset - 0x200000) / 0x1000;
         uint32_t reg = (offset - 0x200000) % 0x1000;
-        if (ctx >= plic_num_contexts(sys)) {
+        if (ctx >= plic_num_contexts(p_sys)) {
             return 0;
         }
         if (reg == 0) {
-            return sys->plic_threshold[ctx];
+            return p_sys->plic_threshold[ctx];
         }
         if (reg == 4) { // CLAIM
-            int s = plic_best(sys, ctx);
+            int s = plic_best(p_sys, ctx);
             if (s) {
                 uint32_t w = uint32_t(s) >> 5;
                 uint32_t b = 1u << (uint32_t(s) & 31);
-                sys->plic_pending[w] &= ~b;
-                sys->plic_claimed[w] |= b;
+                p_sys->plic_pending[w] &= ~b;
+                p_sys->plic_claimed[w] |= b;
             }
-            plic_update(sys);
+            plic_update(p_sys);
             return uint32_t(s);
         }
     }
@@ -585,15 +602,15 @@ void rv64_sys_set_irq(RvSystem *p_sys, uint32_t source, bool level) {
     uint32_t b = 1u << (source & 31);
     if (level) {
         p_sys->plic_level[w] |= b;
-        p_sys->plic_pending[w] |= b;
+        p_sys->plic_pending[w] |= b; // pending held until the interrupt is claimed, even if deasserted
     } else {
         p_sys->plic_level[w] &= ~b;
     }
     plic_update(p_sys);
 }
 
-void rv64_sys_set_interactive(RvSystem *sys) {
-    interactive_serial_enable(&sys->uart);
+void rv64_sys_set_interactive(RvSystem *p_sys) {
+    interactive_serial_enable(&p_sys->uart);
 }
 
 void rv64_sys_set_hart_quantum(RvSystem *p_sys, uint32_t q) {
@@ -612,41 +629,41 @@ void rv64_sys_uart_inject(RvSystem *p_sys, uint64_t at, const uint8_t *data, siz
     u->inject_enabled = true;
 }
 
-static inline uint8_t *virtio_dram_ptr(RvSystem *sys, uint64_t addr, uint64_t len) {
-    if ((addr >= sys->dram_base) && (len <= sys->dram_size) &&
-        (addr + len <= sys->dram_base + sys->dram_size)) {
-        return sys->dram + (addr - sys->dram_base);
+static inline uint8_t *virtio_dram_ptr(RvSystem *p_sys, uint64_t addr, uint64_t len) {
+    if ((addr >= p_sys->dram_base) && (len <= p_sys->dram_size) &&
+        (addr + len <= p_sys->dram_base + p_sys->dram_size)) {
+        return p_sys->dram + (addr - p_sys->dram_base);
     }
-    return nullptr; // not contained within DRAM
+    return nullptr;
 }
 
-static void virtio_blk_process(RvSystem *sys) {
-    if (!sys->vio_queue_ready || !sys->disk || !sys->vio_queue_num) {
+static void virtio_blk_process(RvSystem *p_sys) {
+    if (!p_sys->vio_queue_ready || !p_sys->disk || !p_sys->vio_queue_num) {
         return;
     }
-    uint32_t qsz = sys->vio_queue_num;
+    uint32_t qsz = p_sys->vio_queue_num;
     TTSIM_VERIFY((qsz <= 1024) && ((qsz & (qsz - 1)) == 0), NonContractualBehavior,
         "virtio: invalid QueueNum %u (must be a power of two <= 1024)", qsz);
     uint16_t avail_idx;
-    rv64_phys_read(sys, sys->vio_avail + 2, &avail_idx, 2);
-    while (sys->vio_last_avail != avail_idx) {
+    rv64_phys_read(p_sys, p_sys->vio_avail + 2, &avail_idx, 2);
+    while (p_sys->vio_last_avail != avail_idx) {
         uint16_t head;
-        uint64_t ring_addr = sys->vio_avail + 4 + 2 * (sys->vio_last_avail % qsz);
-        rv64_phys_read(sys, ring_addr, &head, 2);
+        uint64_t ring_addr = p_sys->vio_avail + 4 + 2 * (p_sys->vio_last_avail % qsz);
+        rv64_phys_read(p_sys, ring_addr, &head, 2);
         TTSIM_VERIFY(head < qsz, NonContractualBehavior, "virtio: avail head %u >= qsz %u", head, qsz);
         uint8_t hd[16];
-        rv64_phys_read(sys, sys->vio_desc + 16 * head, hd, 16);
+        rv64_phys_read(p_sys, p_sys->vio_desc + 16 * head, hd, 16);
         uint16_t hflags;
         memcpy(&hflags, hd + 12, 2);
-        uint64_t desc_table = sys->vio_desc;
+        uint64_t desc_table = p_sys->vio_desc;
         uint16_t d = head;
         bool need_read = false;
-        uint32_t desc_count = qsz;
+        uint32_t desc_count = qsz; // descriptors addressable in the current table (split or indirect)
         if (hflags & VRING_DESC_F_INDIRECT) {
             uint32_t ind_len;
             memcpy(&ind_len, hd + 8, 4);
-            TTSIM_VERIFY(ind_len && (ind_len % 16) == 0, NonContractualBehavior,
-                "virtio: bad indirect table length %u", ind_len);
+            TTSIM_VERIFY(ind_len && !(ind_len & 15), NonContractualBehavior,
+                "virtio: invalid indirect table length %u", ind_len);
             memcpy(&desc_table, hd, 8);
             d = 0;
             need_read = true;
@@ -654,15 +671,15 @@ static void virtio_blk_process(RvSystem *sys) {
         }
         uint32_t type = 0xFFFFFFFFu;
         uint64_t sector = 0, disk_off = 0;
-        uint32_t used_len = 0;
+        uint32_t used_len = 0; // used.ring len = sum of device-WRITABLE descriptor lengths (virtio spec)
         bool first = true;
         for (uint32_t chain = 0;; chain++) {
             TTSIM_VERIFY((d < desc_count) && (chain < desc_count), NonContractualBehavior,
                 "virtio: bad descriptor chain (d=%u count=%u chain=%u)", d, desc_count, chain);
             uint8_t dd[16];
             if (need_read) {
-                rv64_phys_read(sys, desc_table + 16 * d, dd, 16);
-            } else {
+                rv64_phys_read(p_sys, desc_table + 16 * d, dd, 16);
+            } else { // first non-indirect desc == head, already read
                 memcpy(dd, hd, 16);
                 need_read = true;
             }
@@ -675,41 +692,44 @@ static void virtio_blk_process(RvSystem *sys) {
             memcpy(&flags, dd + 12, 2);
             memcpy(&next, dd + 14, 2);
             TTSIM_VERIFY(!(flags & VRING_DESC_F_INDIRECT), NonContractualBehavior,
-                "virtio: nested indirect descriptor (d=%u)", d);
+                "virtio: nested indirect descriptor is illegal (d=%u)", d);
             if (flags & VRING_DESC_F_WRITE) {
-                used_len += len;
+                used_len += len; // only count device-WRITABLE buffers
             }
-            if (first) {
-                uint8_t *hp = virtio_dram_ptr(sys, addr, len);
-                TTSIM_VERIFY(hp && len >= 16 && !(flags & VRING_DESC_F_WRITE), NonContractualBehavior,
+            if (first) { // request header (device-readable): le32 type, le32 reserved, le64 sector
+                uint8_t *hp = virtio_dram_ptr(p_sys, addr, len);
+                // The header is device-readable (must NOT be write-flagged) and at least 16 bytes.
+                TTSIM_VERIFY(hp && (len >= 16) && !(flags & VRING_DESC_F_WRITE), NonContractualBehavior,
                     "virtio: bad request header desc (addr=0x%llx len=%u flags=0x%x)", addr, len, flags);
                 memcpy(&type, hp, 4);
                 memcpy(&sector, hp + 8, 8);
-                TTSIM_VERIFY(sector <= sys->disk_sectors, NonContractualBehavior,
-                    "virtio: start sector %llu past end-of-disk (%llu sectors)", sector, sys->disk_sectors);
+                // The start sector must be within the disk; this also keeps sector*512 from overflowing.
+                TTSIM_VERIFY(sector <= p_sys->disk_sectors, NonContractualBehavior,
+                    "virtio: start sector %llu past end-of-disk (%llu sectors)", sector, p_sys->disk_sectors);
                 disk_off = sector * 512;
                 first = false;
-            } else if ((flags & VRING_DESC_F_WRITE) && (len == 1)) {
-                uint8_t s = (type == VIRTIO_BLK_T_IN || type == VIRTIO_BLK_T_OUT ||
-                             type == VIRTIO_BLK_T_FLUSH || type == VIRTIO_BLK_T_GET_ID) ? 0 : 1;
-                rv64_phys_write(sys, addr, &s, 1);
-            } else {
-                uint8_t *dp = virtio_dram_ptr(sys, addr, len);
+            } else if ((flags & VRING_DESC_F_WRITE) && (len == 1)) { // trailing status byte
+                uint8_t s = ((type == VIRTIO_BLK_T_IN) || (type == VIRTIO_BLK_T_OUT) ||
+                             (type == VIRTIO_BLK_T_FLUSH) || (type == VIRTIO_BLK_T_GET_ID)) ? 0 : 1;
+                rv64_phys_write(p_sys, addr, &s, 1);
+            } else { // data buffer: transfer directly between the COW disk and guest DRAM
+                uint8_t *dp = virtio_dram_ptr(p_sys, addr, len);
                 TTSIM_VERIFY(dp, NonContractualBehavior, "virtio: data buffer 0x%llx+%u not in DRAM", addr, len);
                 if ((type == VIRTIO_BLK_T_IN) || (type == VIRTIO_BLK_T_OUT)) {
-                    TTSIM_VERIFY(disk_off + len <= sys->disk_bytes, NonContractualBehavior,
+                    TTSIM_VERIFY(disk_off + len <= p_sys->disk_bytes, NonContractualBehavior,
                         "virtio: %s past end-of-disk (off=%llu len=%u disk=%llu)",
-                        type == VIRTIO_BLK_T_IN ? "read" : "write", disk_off, len, sys->disk_bytes);
+                        (type == VIRTIO_BLK_T_IN) ? "read" : "write", disk_off, len, p_sys->disk_bytes);
+                    // Direction: a T_IN data buffer is device-WRITABLE; a T_OUT data buffer is readable.
                     TTSIM_VERIFY((type == VIRTIO_BLK_T_IN) == ((flags & VRING_DESC_F_WRITE) != 0), NonContractualBehavior,
                         "virtio: data buffer direction mismatch (type=0x%x flags=0x%x)", type, flags);
                     if (type == VIRTIO_BLK_T_IN) {
-                        memcpy(dp, sys->disk_map + disk_off, len);
+                        memcpy(dp, p_sys->disk_map + disk_off, len);
                     } else {
-                        memcpy(sys->disk_map + disk_off, dp, len);
+                        memcpy(p_sys->disk_map + disk_off, dp, len);
                     }
                 } else if (type == VIRTIO_BLK_T_GET_ID) {
-                    uint8_t z = 0;
-                    rv64_phys_write(sys, addr, &z, 1);
+                    uint8_t z = 0; // empty ID string
+                    rv64_phys_write(p_sys, addr, &z, 1);
                 }
                 disk_off += len;
             }
@@ -719,56 +739,57 @@ static void virtio_blk_process(RvSystem *sys) {
             d = next;
         }
         if (type == VIRTIO_BLK_T_FLUSH) {
-            fflush(sys->disk);
+            fflush(p_sys->disk); // honor guest cache flush
         }
+        // Used ring: write the completed buffer (id, len), then bump the (internally tracked) used idx.
         uint32_t id32 = head;
         uint32_t len32 = used_len;
         uint8_t ue[8];
         memcpy(ue, &id32, 4);
         memcpy(ue + 4, &len32, 4);
-        uint64_t ue_addr = sys->vio_used + 4 + 8 * (sys->vio_used_idx % qsz);
-        rv64_phys_write(sys, ue_addr, ue, 8);
-        sys->vio_used_idx++;
-        uint16_t uidx = sys->vio_used_idx;
-        rv64_phys_write(sys, sys->vio_used + 2, &uidx, 2);
-        sys->vio_last_avail++;
+        uint64_t ue_addr = p_sys->vio_used + 4 + 8 * (p_sys->vio_used_idx % qsz);
+        rv64_phys_write(p_sys, ue_addr, ue, 8);
+        p_sys->vio_used_idx++;
+        uint16_t uidx = p_sys->vio_used_idx;
+        rv64_phys_write(p_sys, p_sys->vio_used + 2, &uidx, 2);
+        p_sys->vio_last_avail++;
     }
-    sys->vio_int_status |= 1;
-    rv64_sys_set_irq(sys, VIRTIO_BLK_IRQ, true);
+    p_sys->vio_int_status |= 1; // used-buffer notification
+    rv64_sys_set_irq(p_sys, VIRTIO_BLK_IRQ, true);
 }
 
-static uint8_t vio_cfg_byte(RvSystem *sys, uint32_t i) {
-    if (i < 8) {
-        return uint8_t(sys->disk_sectors >> (8 * i));
+static uint8_t vio_cfg_byte(RvSystem *p_sys, uint32_t i) {
+    if (i < 8) { // capacity (u64 sectors)
+        return uint8_t(p_sys->disk_sectors >> (8 * i));
     }
-    return 0;
+    return 0; // modern device advertises no other config fields, so return 0
 }
 
-static uint64_t virtio_read(RvSystem *sys, uint64_t paddr) {
+static uint64_t virtio_read(RvSystem *p_sys, uint64_t paddr) {
     uint32_t slot = uint32_t((paddr - VIRTIO_BASE) / 0x1000);
     uint64_t off = (paddr - VIRTIO_BASE) % 0x1000;
-    if ((slot != VIO_BLK_SLOT) || !sys->disk) {
-        return 0;
+    if ((slot != VIO_BLK_SLOT) || !p_sys->disk) {
+        return 0; // unused slot (including the blk slot if no disk image is attached)
     }
     switch (off) {
         case 0x000: return VIO_MAGIC;
         case 0x004: return VIO_VERSION;
-        case 0x008: return 2;
-        case 0x00c: return VIO_VENDOR;
-        case 0x010:
-            return (sys->vio_dev_feat_sel == 1) ? 1 : 0;
-        case 0x034: return 1024;
+        case 0x008: return 2; // virtio-blk
+        case 0x00C: return VIO_VENDOR;
+        case 0x010: // (Host/Device)Features, selected word
+            return (p_sys->vio_dev_feat_sel == 1) ? 1 : 0; // only VIRTIO_F_VERSION_1 (bit 32)
+        case 0x034: return 1024; // QueueNumMax
         case 0x040: return 0;
-        case 0x044: return sys->vio_queue_ready;
-        case 0x060: return sys->vio_int_status;
-        case 0x070: return sys->vio_status;
-        case 0x0fc: return 0;
+        case 0x044: return p_sys->vio_queue_ready;
+        case 0x060: return p_sys->vio_int_status;
+        case 0x070: return p_sys->vio_status;
+        case 0x0FC: return 0; // ConfigGeneration
         case 0x100 ... 0x13F: {
             uint64_t v = 0;
             for (int k = 0; k < 8; k++) {
                 uint32_t i = uint32_t(off - 0x100) + k;
                 if (i < 0x40) {
-                    v |= uint64_t(vio_cfg_byte(sys, i)) << (8 * k);
+                    v |= uint64_t(vio_cfg_byte(p_sys, i)) << (8 * k);
                 }
             }
             return v;
@@ -778,39 +799,39 @@ static uint64_t virtio_read(RvSystem *sys, uint64_t paddr) {
     }
 }
 
-static void virtio_write(RvSystem *sys, uint64_t paddr, uint32_t val) {
+static void virtio_write(RvSystem *p_sys, uint64_t paddr, uint32_t val) {
     uint32_t slot = uint32_t((paddr - VIRTIO_BASE) / 0x1000);
     uint64_t off = (paddr - VIRTIO_BASE) % 0x1000;
     if (slot != VIO_BLK_SLOT) {
-        return;
+        return; // empty transports ignore writes
     }
     switch (off) {
-        case 0x014: sys->vio_dev_feat_sel = val; break;
-        case 0x020: break;
-        case 0x024: sys->vio_drv_feat_sel = val; break;
-        case 0x030: break;
-        case 0x038: sys->vio_queue_num = val; break;
-        case 0x050: virtio_blk_process(sys); break;
+        case 0x014: p_sys->vio_dev_feat_sel = val; break; // (Host/Device)FeaturesSel
+        case 0x020: break; // (Guest/Driver)Features (accepted)
+        case 0x024: p_sys->vio_drv_feat_sel = val; break; // (Guest/Driver)FeaturesSel
+        case 0x030: break; // QueueSel (only queue 0)
+        case 0x038: p_sys->vio_queue_num = val; break; // QueueNum
+        case 0x050: virtio_blk_process(p_sys); break; // QueueNotify
         case 0x064:
-            sys->vio_int_status &= ~val;
-            rv64_sys_set_irq(sys, VIRTIO_BLK_IRQ, sys->vio_int_status != 0);
+            p_sys->vio_int_status &= ~val;
+            rv64_sys_set_irq(p_sys, VIRTIO_BLK_IRQ, p_sys->vio_int_status != 0);
             break;
         case 0x070:
-            sys->vio_status = val;
-            if (val == 0) {
-                sys->vio_queue_ready = 0;
-                sys->vio_last_avail = 0;
-                sys->vio_used_idx = 0;
-                sys->vio_int_status = 0;
+            p_sys->vio_status = val;
+            if (val == 0) { // reset
+                p_sys->vio_queue_ready = 0;
+                p_sys->vio_last_avail = 0;
+                p_sys->vio_used_idx = 0;
+                p_sys->vio_int_status = 0;
             }
             break;
-        case 0x044: sys->vio_queue_ready = val; break; // QueueReady
-        case 0x080: sys->vio_desc = (sys->vio_desc & ~0xFFFFFFFFull) | val; break;
-        case 0x084: sys->vio_desc = (sys->vio_desc & 0xFFFFFFFFull) | (uint64_t(val) << 32); break;
-        case 0x090: sys->vio_avail = (sys->vio_avail & ~0xFFFFFFFFull) | val; break;
-        case 0x094: sys->vio_avail = (sys->vio_avail & 0xFFFFFFFFull) | (uint64_t(val) << 32); break;
-        case 0x0a0: sys->vio_used = (sys->vio_used & ~0xFFFFFFFFull) | val; break;
-        case 0x0a4: sys->vio_used = (sys->vio_used & 0xFFFFFFFFull) | (uint64_t(val) << 32); break;
+        case 0x044: p_sys->vio_queue_ready = val; break; // QueueReady
+        case 0x080: p_sys->vio_desc = (p_sys->vio_desc & ~0xFFFFFFFFull) | val; break;
+        case 0x084: p_sys->vio_desc = (p_sys->vio_desc & 0xFFFFFFFFull) | (uint64_t(val) << 32); break;
+        case 0x090: p_sys->vio_avail = (p_sys->vio_avail & ~0xFFFFFFFFull) | val; break;
+        case 0x094: p_sys->vio_avail = (p_sys->vio_avail & 0xFFFFFFFFull) | (uint64_t(val) << 32); break;
+        case 0x0a0: p_sys->vio_used = (p_sys->vio_used & ~0xFFFFFFFFull) | val; break;
+        case 0x0a4: p_sys->vio_used = (p_sys->vio_used & 0xFFFFFFFFull) | (uint64_t(val) << 32); break;
         default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%llx", off);
     }
 }
@@ -825,23 +846,61 @@ void rv64_sys_set_disk(RvSystem *p_sys, const char *path) {
     TTSIM_VERIFY(p_sys->disk_map != MAP_FAILED, ConfigurationError, "cannot mmap --disk '%s'", path);
 }
 
-static uint64_t rtc_read(RvSystem *sys, uint64_t off) {
-    switch (off) {
+static uint64_t rtc_read(RvSystem *p_sys, uint32_t offset) {
+    switch (offset) {
         case 0x00: {
-            uint64_t insns = sys->visible_icount;
-            uint64_t ns = RTC_BASE_NS + insns * (100 / sys->timer_insns_per_tick);
-            sys->rtc_latched_high = uint32_t(ns >> 32);
+            uint64_t insns = p_sys->visible_icount;
+            // XXX Tweak formula for cases where 100 / timer_insns_per_tick is not integral?
+            uint64_t ns = RTC_BASE_NS + insns * (100 / p_sys->timer_insns_per_tick);
+            p_sys->rtc_latched_high = uint32_t(ns >> 32);
             return uint32_t(ns);
         }
-        case 0x04: return sys->rtc_latched_high;
+        case 0x04: return p_sys->rtc_latched_high;
         case 0x08: case 0x0C: case 0x18: return 0;
+        default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
     }
-    TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%llx", off);
+}
+
+// DMA callbacks - currently no IOMMU
+static void tt_dma_rd(uint64_t paddr, void *p, uint32_t size) {
+    rv64_phys_read(&g_sys, paddr, p, size);
+}
+
+static void tt_dma_wr(uint64_t paddr, const void *p, uint32_t size) {
+    rv64_phys_write(&g_sys, paddr, p, size);
+}
+
+static uint32_t tt_ecam_read(uint32_t offset, uint32_t size) {
+    TTSIM_VERIFY((size == 1) || (size == 2) || (size == 4), UnimplementedFunctionality, "size=%d", size);
+    TTSIM_VERIFY(!(offset & (size - 1)), UnimplementedFunctionality, "misaligned offset=0x%x", offset);
+    uint32_t bdf = offset >> 12;
+    uint32_t reg = offset & 0xFFC;
+    uint32_t value = s_tt_cfg_rd(bdf, reg);
+    if (size < 4) {
+        uint32_t shift = (offset & 3) * 8;
+        value = (value >> shift) & ((1u << (size * 8)) - 1);
+    }
+    return value;
+}
+
+static void tt_ecam_write(uint32_t offset, uint32_t size, uint32_t value) {
+    TTSIM_VERIFY((size == 1) || (size == 2) || (size == 4), UnimplementedFunctionality, "size=%d", size);
+    TTSIM_VERIFY(!(offset & (size - 1)), UnimplementedFunctionality, "misaligned offset=0x%x", offset);
+    uint32_t bdf = offset >> 12;
+    uint32_t reg = offset & 0xFFC;
+    if (size < 4) {
+        uint32_t shift = (offset & 3) * 8;
+        uint32_t write_mask = ((1u << (size * 8)) - 1) << shift;
+        value = (s_tt_cfg_rd(bdf, reg) & ~write_mask) | ((value << shift) & write_mask);
+    }
+    s_tt_cfg_wr(bdf, reg, value);
 }
 
 static uint64_t device_read(RvSystem *p_sys, uint64_t paddr, uint32_t size) {
     if ((paddr >= RESET_ROM_BASE) && (paddr - RESET_ROM_BASE <= RESET_ROM_SIZE - size)) {
-        TTSIM_ERROR(UnimplementedFunctionality, "reset rom: paddr=0x%llx size=%d", paddr, size);
+        uint64_t v = 0;
+        memcpy(&v, p_sys->reset_rom + (paddr - RESET_ROM_BASE), size);
+        return v;
     }
     if ((paddr >= CLINT_BASE) && (paddr < CLINT_BASE + CLINT_SIZE)) {
         return clint_read(p_sys, paddr - CLINT_BASE, size);
@@ -864,6 +923,23 @@ static uint64_t device_read(RvSystem *p_sys, uint64_t paddr, uint32_t size) {
     }
     if ((paddr >= SYSCON_BASE) && (paddr < SYSCON_BASE + SYSCON_SIZE)) {
         TTSIM_ERROR(UnimplementedFunctionality, "syscon: paddr=0x%llx size=%d", paddr, size);
+    }
+    if (p_sys->tt_active) {
+        if ((paddr >= TT_ECAM_BASE) && (paddr < TT_ECAM_BASE + TT_ECAM_SIZE)) {
+            return tt_ecam_read(paddr - TT_ECAM_BASE, size);
+        }
+        for (uint32_t b = 0; b < 3; b++) {
+            if ((paddr >= p_sys->tt_bar_base[b]) && (paddr < p_sys->tt_bar_base[b] + p_sys->tt_bar_size[b])) {
+                s_tt_clock(TT_CLOCK_BURST); // advance the device on BAR reads
+                uint64_t ret = 0;
+                TTSIM_VERIFY(size <= sizeof(ret), UnimplementedFunctionality, "tt bar size=%d", size);
+                s_tt_mem_rd(paddr, &ret, size);
+                return ret;
+            }
+        }
+        if ((paddr == 0x78) && (size == 4)) {
+            return 0; // XXX Need to track down mysterious read and get rid of this
+        }
     }
     TTSIM_ERROR(UnimplementedFunctionality, "paddr=0x%llx size=%d", paddr, size);
 }
@@ -890,11 +966,52 @@ static void device_write(RvSystem *p_sys, uint64_t paddr, uint32_t size, uint64_
     if ((paddr >= SYSCON_BASE) && (paddr < SYSCON_BASE + SYSCON_SIZE)) {
         TTSIM_ERROR(UnimplementedFunctionality, "syscon: paddr=0x%llx size=%d val=0x%llx", paddr, size, val);
     }
+    if (p_sys->tt_active) {
+        if ((paddr >= TT_ECAM_BASE) && (paddr < TT_ECAM_BASE + TT_ECAM_SIZE)) {
+            return tt_ecam_write(paddr - TT_ECAM_BASE, size, val);
+        }
+        for (uint32_t b = 0; b < 3; b++) {
+            if ((paddr >= p_sys->tt_bar_base[b]) && (paddr < p_sys->tt_bar_base[b] + p_sys->tt_bar_size[b])) {
+                return s_tt_mem_wr(paddr, &val, size);
+            }
+        }
+    }
     TTSIM_ERROR(UnimplementedFunctionality, "paddr=0x%llx size=%d val=0x%llx", paddr, size, val);
 }
 
-bool rv64_sys_tt_attach(RvSystem *sys, const char *path, uint64_t ecam_base, uint64_t clock_burst) {
-    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+void rv64_sys_tt_attach(RvSystem *p_sys, const char *path) {
+    // Load simulator and query entry points
+    s_tt_handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!s_tt_handle) {
+        TTSIM_ERROR(ConfigurationError, "dlopen '%s' failed: %s", path, dlerror());
+    }
+    s_tt_init = (decltype(s_tt_init))dlsym(s_tt_handle, "libttsim_init");
+    s_tt_clock = (decltype(s_tt_clock))dlsym(s_tt_handle, "libttsim_clock");
+    s_tt_cfg_rd = (decltype(s_tt_cfg_rd))dlsym(s_tt_handle, "libttsim_pci_config_rd32");
+    s_tt_cfg_wr = (decltype(s_tt_cfg_wr))dlsym(s_tt_handle, "libttsim_pci_config_wr32");
+    s_tt_mem_rd = (decltype(s_tt_mem_rd))dlsym(s_tt_handle, "libttsim_pci_mem_rd_bytes");
+    s_tt_mem_wr = (decltype(s_tt_mem_wr))dlsym(s_tt_handle, "libttsim_pci_mem_wr_bytes");
+    s_tt_set_dma_cb = (decltype(s_tt_set_dma_cb))dlsym(s_tt_handle, "libttsim_set_pci_dma_mem_callbacks");
+    if (!s_tt_init || !s_tt_clock || !s_tt_cfg_rd || !s_tt_cfg_wr || !s_tt_mem_rd || !s_tt_mem_wr || !s_tt_set_dma_cb) {
+        TTSIM_ERROR(ConfigurationError, "'%s' is missing a required libttsim entry point", path);
+    }
+    s_tt_set_dma_cb(tt_dma_rd, tt_dma_wr);
+    s_tt_init();
+
+    // Probe BAR addresses and sizes
+    for (uint32_t b = 0; b < 3; b++) {
+        uint32_t bar_off = 0x10 + 8*b; // 64-bit memory BARs
+        uint32_t lo = s_tt_cfg_rd(0, bar_off);
+        uint32_t hi = s_tt_cfg_rd(0, bar_off + 4);
+        s_tt_cfg_wr(0, bar_off, 0xFFFFFFFFu);
+        s_tt_cfg_wr(0, bar_off + 4, 0xFFFFFFFFu);
+        uint64_t mask = (uint64_t(s_tt_cfg_rd(0, bar_off + 4)) << 32) | (s_tt_cfg_rd(0, bar_off) & ~0xFu);
+        s_tt_cfg_wr(0, bar_off, lo); // restore the firmware assignment (probe-only keeps it)
+        s_tt_cfg_wr(0, bar_off + 4, hi);
+        p_sys->tt_bar_base[b] = ((uint64_t(hi) << 32) | lo) & ~0xFull;
+        p_sys->tt_bar_size[b] = ~mask + 1;
+    }
+    p_sys->tt_active = true;
 }
 
 static inline bool in_dram(RvSystem *p_sys, uint64_t paddr, uint32_t size) {
@@ -926,9 +1043,9 @@ void rv64_phys_write(RvSystem *p_sys, uint64_t paddr, const void *src, uint32_t 
     device_write(p_sys, paddr, size, v);
 }
 
-static inline bool page_has_reservation(const RvSystem *sys, uint64_t pa_page) {
-    for (uint32_t i = 0; i < sys->num_harts; i++) {
-        const Rv64SysHartState *o = &sys->harts[i];
+static inline bool page_has_reservation(const RvSystem *p_sys, uint64_t pa_page) {
+    for (uint32_t i = 0; i < p_sys->num_harts; i++) {
+        const Rv64SysHartState *o = &p_sys->harts[i];
         if (o->reservation_valid && ((o->reservation_paddr & ~0xFFFull) == pa_page)) {
             return true;
         }
@@ -936,11 +1053,11 @@ static inline bool page_has_reservation(const RvSystem *sys, uint64_t pa_page) {
     return false;
 }
 
-static inline void clear_load_reservations_if_overlap(RvSystem *sys, const Rv64SysHartState *storer,
+static inline void clear_load_reservations_if_overlap(RvSystem *p_sys, const Rv64SysHartState *storer,
                                                       uint64_t pa, uint64_t len) {
-    for (uint32_t i = 0; i < sys->num_harts; i++) {
-        Rv64SysHartState *o = &sys->harts[i];
-        if (o != storer && o->reservation_valid &&
+    for (uint32_t i = 0; i < p_sys->num_harts; i++) {
+        Rv64SysHartState *o = &p_sys->harts[i];
+        if ((o != storer) && o->reservation_valid &&
             (pa < o->reservation_paddr + o->reservation_size) && (o->reservation_paddr < pa + len)) {
             o->reservation_valid = false;
         }
@@ -983,13 +1100,13 @@ static __attribute__((noinline)) bool translate_slow(Rv64SysHartState *h, uint64
     if ((l2->tag == l2tag) && (l2->vpn == vpn_full) && pte_access_ok(h, l2->pte, acc, eff_priv)) {
         ppn_base = l2->pa_page;
     } else {
-        if (((int64_t(vaddr) >> 39) != 0) && ((int64_t(vaddr) >> 39) != -1)) {
+        if (((int64_t(vaddr) >> 39) != 0) && ((int64_t(vaddr) >> 39) != -1)) { // VA must be canonical
             rv64_sys_raise(h, fault_cause, vaddr);
             return false;
         }
         uint64_t vpn[3] = {(vaddr >> 12) & 0x1FF, (vaddr >> 21) & 0x1FF, (vaddr >> 30) & 0x1FF};
         uint64_t pte = 0, pte_addr = 0; uint32_t level = 0;
-        uint64_t a = (h->satp & ((1ull << 44) - 1)) << 12;
+        uint64_t a = (h->satp & ((1ull << 44) - 1)) << 12; // root page table physical address
         bool found = false;
         for (int lv = 2; lv >= 0; lv--) {
             pte_addr = a + vpn[lv] * 8;
@@ -1002,21 +1119,22 @@ static __attribute__((noinline)) bool translate_slow(Rv64SysHartState *h, uint64
                 rv64_sys_raise(h, fault_cause, vaddr);
                 return false;
             }
-            if (pte & (PTE_R | PTE_X)) {
+            if (pte & (PTE_R | PTE_X)) { // leaf
                 uint64_t ppn = (pte >> 10) & ((1ull << 44) - 1);
-                if ((lv > 0) && (ppn & ((1ull << (9 * lv)) - 1))) {
+                if ((lv > 0) && (ppn & ((1ull << (9 * lv)) - 1))) { // misaligned superpage
                     rv64_sys_raise(h, fault_cause, vaddr);
                     return false;
                 }
                 level = uint32_t(lv); found = true; break;
             }
-            a = (((pte >> 10) & ((1ull << 44) - 1)) << 12);
+            a = (((pte >> 10) & ((1ull << 44) - 1)) << 12); // descend to next level
         }
-        if (!found) {
+        if (!found) { // ran out of levels
             rv64_sys_raise(h, fault_cause, vaddr);
             return false;
         }
 
+        // leaf permission (kind + U/S + SUM/MXR)
         bool ok;
         if (acc == MemAccess::Fetch) {
             ok = pte & PTE_X;
@@ -1038,14 +1156,16 @@ static __attribute__((noinline)) bool translate_slow(Rv64SysHartState *h, uint64
             rv64_sys_raise(h, fault_cause, vaddr);
             return false;
         }
+        // set A (and D on store); set-on-access, written once.
         uint64_t newpte = pte | PTE_A | ((acc == MemAccess::Store) ? PTE_D : 0);
         if (newpte != pte) {
             rv64_phys_write(h->p_sys, pte_addr, &newpte, 8);
-            if (h->p_sys->num_harts > 1) {
+            if (h->p_sys->num_harts > 1) { // a PTE A/D write is a store too (cross-hart only)
                 clear_load_reservations_if_overlap(h->p_sys, h, pte_addr, 8);
             }
             pte = newpte;
         }
+        // compose physical page base (superpage low bits come from the vaddr)
         uint64_t ppn = (pte >> 10) & ((1ull << 44) - 1);
         if (level == 0) {
             ppn_base = (ppn << 12);
@@ -1060,7 +1180,7 @@ static __attribute__((noinline)) bool translate_slow(Rv64SysHartState *h, uint64
             l2->pa_page = ppn_base;
             l2->pte = pte;
         } else {
-            l2->tag = 0;
+            l2->tag = 0; // do not cache MMIO leaves
         }
     }
 
@@ -1094,6 +1214,7 @@ static inline bool translate(Rv64SysHartState *h, uint64_t vaddr, MemAccess acc,
     return translate_slow(h, vaddr, acc, eff_priv, vaddr >> 12, paddr);
 }
 
+// Record the LR reservation's physical address and evict its page from every hart's store DTLB
 void rv64_sys_lr_reserve(Rv64SysHartState *h, uint64_t vaddr, uint32_t size) {
     RvSystem *p_sys = h->p_sys;
     if (p_sys->num_harts <= 1) {
@@ -1181,7 +1302,7 @@ bool rv64_sys_store(Rv64SysHartState *h, uint64_t vaddr, const void *src, uint32
     RvSystem *p_sys = h->p_sys;
     if (in_dram(p_sys, paddr, size)) [[likely]] {
         memcpy(p_sys->dram + (paddr - p_sys->dram_base), src, size);
-        if (p_sys->num_harts > 1) {
+        if (p_sys->num_harts > 1) { // invalidate any other hart's reservation this store overlaps
             clear_load_reservations_if_overlap(p_sys, h, paddr, size);
         }
     } else {
@@ -1210,6 +1331,10 @@ void rv64_sys_sfence(Rv64SysHartState *h, uint64_t vaddr, uint64_t asid) {
     h->reservation_valid = false; // LR/SC reservation is conservatively dropped on any fence
 }
 
+static uint64_t get_sstatus(Rv64SysHartState *h) {
+    return h->mstatus & SSTATUS_MASK;
+}
+
 uint64_t rv64_sys_read_csr(Rv64SysHartState *h, uint32_t csr, bool *ok) {
     *ok = true;
     switch (csr) {
@@ -1229,7 +1354,7 @@ uint64_t rv64_sys_read_csr(Rv64SysHartState *h, uint32_t csr, bool *ok) {
         case CSR_MENVCFG: return h->menvcfg;
         case CSR_MHARTID: return h->hart_id;
         case CSR_MVENDORID: case CSR_MARCHID: case CSR_MIMPID: case CSR_MCONFIGPTR: return 0;
-        case CSR_SSTATUS: return h->mstatus & SSTATUS_MASK;
+        case CSR_SSTATUS: return get_sstatus(h);
         case CSR_SIE: return h->mie & h->mideleg;
         case CSR_SIP: return h->mip & h->mideleg;
         case CSR_STVEC: return h->stvec;
@@ -1250,10 +1375,10 @@ uint64_t rv64_sys_read_csr(Rv64SysHartState *h, uint32_t csr, bool *ok) {
         default:
             if ((csr >= CSR_PMPADDR0) && (csr <= CSR_PMPADDR0 + 63)) {
                 uint32_t idx = csr - CSR_PMPADDR0;
-                return idx < 16 ? h->pmpaddr[idx] : 0;
+                return (idx < 16) ? h->pmpaddr[idx] : 0;
             }
             if ((csr >= 0x3A0) && (csr <= 0x3AE) && !(csr & 1)) {
-                return 0;
+                return 0; // pmpcfg4..14 WARL-zero
             }
             if ((csr >= 0xB03) && (csr <= 0xB12)) {
                 return h->mhpmcounter[csr - 0xB00];
@@ -1333,7 +1458,7 @@ void rv64_sys_write_csr(Rv64SysHartState *h, uint32_t csr, uint64_t val, bool *o
         case CSR_SATP: {
             uint32_t mode = (val >> 60) & 15;
             TTSIM_VERIFY((mode == 0) || (mode == 8), NonContractualBehavior,
-                "menvcfg write sets reserved mode: %d", mode);
+                "satp write sets reserved mode: %d", mode);
             h->satp = val;
             tlb_flush(h);
             break;
@@ -1343,6 +1468,7 @@ void rv64_sys_write_csr(Rv64SysHartState *h, uint32_t csr, uint64_t val, bool *o
                 "scounteren write sets reserved counter bits: 0x%llx", val);
             h->scounteren = val;
             break;
+        case CSR_FFLAGS: h->fcsr = (h->fcsr & ~0x1F) | (val & 0x1F); break;
         case CSR_FCSR: h->fcsr = val & 0xFF; break;
         case CSR_PMPCFG0: h->pmpcfg[0] = val; break;
         case CSR_PMPADDR0 ... CSR_PMPADDR0 + 15: h->pmpaddr[csr - CSR_PMPADDR0] = val; break;
@@ -1358,6 +1484,7 @@ void rv64_sys_raise(Rv64SysHartState *h, uint64_t cause, uint64_t tval) {
     if ((cause == EXC_BREAKPOINT) || (cause == 8) || (cause == 9) || (cause == 11)) {
         uint64_t pc = current_insn_pc(h);
         uint64_t npc = pc;
+        [[maybe_unused]] int old_prv = h->priv;
         take_trap(h, &npc, cause, tval, false);
         h->trap_pending = true;
         h->trap_npc = npc;
@@ -1370,7 +1497,8 @@ void rv64_sys_raise(Rv64SysHartState *h, uint64_t cause, uint64_t tval) {
 void rv64_sys_take_trap(Rv64SysHartState *h, uint64_t cause, uint64_t tval, uint64_t epc) {
     bool interrupt = (cause & CAUSE_INTERRUPT) != 0;
     uint64_t code = cause & ~CAUSE_INTERRUPT;
-    h->reservation_valid = false;
+    [[maybe_unused]] uint32_t from_priv = h->priv;
+    h->reservation_valid = false; // clear the LR/SC reservation on any trap entry (interrupt or exception)
     bool to_s = false;
     if (h->priv <= PRIV_S) {
         uint64_t deleg = interrupt ? h->mideleg : h->medeleg;
@@ -1435,7 +1563,7 @@ void rv64_sys_xret(Rv64SysHartState *h, bool from_machine) {
         h->pc = h->sepc;
     }
     tlb_flush_l1(h);
-    irq_recompute_deliverable(h);
+    irq_recompute_deliverable(h); // a pending interrupt may now be deliverable
 }
 
 static inline uint64_t current_insn_pc(const Rv64SysHartState *p_hart) {
@@ -1446,7 +1574,7 @@ static inline void clear_load_reservation(Rv64SysHartState *p_hart) {
     p_hart->reservation_valid = false;
 }
 
-[[maybe_unused]] static inline void scheduler_request_yield(Rv64SysHartState *p_hart) {
+static inline void scheduler_request_yield(Rv64SysHartState *p_hart) {
     if (g_sys.num_harts <= 1) {
         return;
     }
@@ -1454,28 +1582,30 @@ static inline void clear_load_reservation(Rv64SysHartState *p_hart) {
     p_hart->steps_left = 0;
 }
 
-static uint64_t clint_mtime_ticks_visible(const RvSystem *p_clint) {
-    return g_sys.visible_icount / p_clint->timer_insns_per_tick;
+static uint64_t clint_mtime_ticks_visible(const RvSystem *p_sys) {
+    return g_sys.visible_icount / p_sys->timer_insns_per_tick;
 }
 
-static uint64_t clint_mtime_visible(const RvSystem *p_clint) {
-    return p_clint->mtime_base + clint_mtime_ticks_visible(p_clint);
+static uint64_t clint_mtime_visible(const RvSystem *p_sys) {
+    return p_sys->mtime_base + clint_mtime_ticks_visible(p_sys);
 }
 
-static uint64_t clint_mtip_event_count(const RvSystem *p_clint, const Rv64SysHartState *p_hart) {
-    uint64_t mtimecmp = p_clint->mtimecmp[p_hart->hart_id];
-    if (mtimecmp == ~0ULL) {
+static uint64_t clint_mtip_event_count(const RvSystem *p_sys, const Rv64SysHartState *p_hart) {
+    uint64_t mtimecmp = p_sys->mtimecmp[p_hart->hart_id];
+    if (mtimecmp == ~0ull) {
         return UINT64_MAX;
     }
-    if (clint_mtime_visible(p_clint) >= mtimecmp) {
+    if (clint_mtime_visible(p_sys) >= mtimecmp) {
         return g_sys.visible_icount;
     }
-    if (mtimecmp < p_clint->mtime_base) {
+    if (mtimecmp < p_sys->mtime_base) {
         return g_sys.visible_icount;
     }
-    uint64_t target_ticks = mtimecmp - p_clint->mtime_base;
-    if (target_ticks > UINT64_MAX / p_clint->timer_insns_per_tick) return UINT64_MAX;
-    return target_ticks * p_clint->timer_insns_per_tick;
+    uint64_t target_ticks = mtimecmp - p_sys->mtime_base;
+    if (target_ticks > UINT64_MAX / p_sys->timer_insns_per_tick) {
+        return UINT64_MAX;
+    }
+    return target_ticks * p_sys->timer_insns_per_tick;
 }
 
 static void irq_reschedule(Rv64SysHartState *p_hart) {
@@ -1564,6 +1694,7 @@ static void take_trap(Rv64SysHartState *p_hart, uint64_t *npc, uint64_t cause, u
 static void fault(Rv64SysHartState *p_hart, uint64_t cause, uint64_t tval) {
     uint64_t fault_pc = current_insn_pc(p_hart);
     uint64_t npc = fault_pc;
+    [[maybe_unused]] int old_prv = p_hart->priv;
     take_trap(p_hart, &npc, cause, tval, false);
     p_hart->trap_pending = true;
     p_hart->trap_pc = fault_pc;
@@ -1593,7 +1724,7 @@ static void irq_recompute_deliverable(Rv64SysHartState *p_hart) {
     irq_reschedule(p_hart);
 }
 
-[[maybe_unused]] static void hart_write_mip(Rv64SysHartState *p_hart, uint64_t v) {
+static void hart_write_mip(Rv64SysHartState *p_hart, uint64_t v) {
     clint_refresh_irq(p_hart);
     p_hart->mip = (v & ~MIP_PLATFORM_MASK) | (p_hart->mip & MIP_PLATFORM_MASK);
     irq_reschedule(p_hart);
@@ -1602,7 +1733,7 @@ static void irq_recompute_deliverable(Rv64SysHartState *p_hart) {
 static void wfi_advance_virtual_time(Rv64SysHartState *p_hart) {
     RvSystem *p_sys = p_hart->p_sys;
     uint64_t mtimecmp = p_sys->mtimecmp[p_hart->hart_id];
-    if ((mtimecmp == ~0ULL) || (clint_mtime_visible(p_sys) >= mtimecmp)) {
+    if ((mtimecmp == ~0ull) || (clint_mtime_visible(p_sys) >= mtimecmp)) {
         return;
     }
     if (mtimecmp < p_sys->mtime_base) {
@@ -1658,7 +1789,7 @@ static Rv64SysHartState *scheduler_choose_hart(Rv64SysHartState *p_current_hart,
     for (uint32_t i = 0; i < g_sys.num_harts; i++) {
         uint32_t h = (*p_next_hart + i) % g_sys.num_harts;
         Rv64SysHartState *p_hart = &g_sys.harts[h];
-        bool reset_vector_wait = p_hart->wfi_sleeping && false; // XXX reset ROM
+        bool reset_vector_wait = p_hart->wfi_sleeping && (p_hart->pc == RESET_ROM_BASE);
         if (p_hart->wfi_sleeping && !(allow_reset_wait && reset_vector_wait) && !hart_has_wfi_wake_event(p_hart)) {
             continue;
         }
@@ -1690,15 +1821,15 @@ static Rv64SysHartState *scheduler_choose_hart(Rv64SysHartState *p_current_hart,
 }
 
 static void clint_refresh_irq(Rv64SysHartState *p_hart) {
-    RvSystem *p_clint = p_hart->p_sys;
+    RvSystem *p_sys = p_hart->p_sys;
     uint32_t hart_id = p_hart->hart_id;
     uint64_t mip = p_hart->mip;
-    if (clint_mtime_visible(p_clint) >= p_clint->mtimecmp[hart_id]) {
+    if (clint_mtime_visible(p_sys) >= p_sys->mtimecmp[hart_id]) {
         mip |= MIP_MTIP;
     } else {
         mip &= ~MIP_MTIP;
     }
-    if (p_clint->msip[hart_id] & 1) {
+    if (p_sys->msip[hart_id] & 1) {
         mip |= MIP_MSIP;
     } else {
         mip &= ~MIP_MSIP;
@@ -1730,29 +1861,32 @@ static void check_interrupts(Rv64SysHartState *p_hart) {
     }
 
     int cause = -1;
-    static const int pri[] = {11, 7, 3, 9, 1, 5};
-    for (size_t i = 0; i < sizeof(pri) / sizeof(pri[0]); i++) {
-        if (all & (1ULL << pri[i])) {
-            cause = pri[i];
-            break;
+    {
+        static const int pri[] = {11, 7, 3, 9, 1, 5}; // MTIP wins over MSIP, SSIP wins over STIP
+        for (size_t i = 0; i < std::size(pri); i++) {
+            if (all & (1ull << pri[i])) {
+                cause = pri[i];
+                break;
+            }
         }
     }
     if (cause < 0) {
         return;
     }
     uint64_t npc = current_insn_pc(p_hart);
+    [[maybe_unused]] int old_prv = p_hart->priv;
     take_trap(p_hart, &npc, uint64_t(cause), 0, true);
     p_hart->pc = npc;
 }
 
-void rv64_sys_run(RvSystem *sys, uint64_t max_insns) {
+void rv64_sys_run(RvSystem *p_sys, uint64_t max_insns) {
     Rv64SysHartState *p_hart = nullptr;
     uint32_t next_hart = 0;
     while (g_sys.insn_count < max_insns) {
         p_hart = scheduler_choose_hart(p_hart, &next_hart);
         g_sys.active_hart = p_hart;
-        interactive_serial_poll_if_due(sys);
-        uart_inject_pump(sys);
+        interactive_serial_poll_if_due(p_sys);
+        uart_inject_pump(p_sys);
         if (g_sys.visible_icount >= p_hart->irq_next_check) [[unlikely]] {
             check_interrupts(p_hart);
         }
@@ -1821,12 +1955,12 @@ void rv64_sys_run(RvSystem *sys, uint64_t max_insns) {
         }
         if (p_hart->wfi_retired) [[unlikely]] {
             p_hart->wfi_retired = false;
-            uart_inject_pump(sys);
+            uart_inject_pump(p_sys);
             if (p_hart->irq_next_check <= g_sys.visible_icount) {
                 continue;
             }
-            if (sys->uart.interactive) {
-                interactive_serial_poll(sys);
+            if (p_sys->uart.interactive) {
+                interactive_serial_poll(p_sys);
                 if (p_hart->irq_next_check <= g_sys.visible_icount) {
                     continue;
                 }

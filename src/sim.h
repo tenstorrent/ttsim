@@ -537,6 +537,15 @@ uint32_t pcie_niu_rd32(uint32_t noc_instance, uint32_t offset);
 #endif
 
 struct PcieTile {
+    uint32_t pci_cfg_command_status;
+    uint32_t pci_cfg_cache_latency_header;
+    uint32_t pci_cfg_bar0_lo; // XXX These are programmable for BAR sizing, but not relocatable at present
+    uint32_t pci_cfg_bar0_hi;
+    uint32_t pci_cfg_bar2_lo;
+    uint32_t pci_cfg_bar2_hi;
+    uint32_t pci_cfg_bar4_lo;
+    uint32_t pci_cfg_bar4_hi;
+    uint32_t pci_cfg_interrupt_line_pin;
     IatuRegion iatu_outbound[16];
     IatuRegion iatu_inbound[16];
 #if TT_ARCH_VERSION == 0

@@ -34,9 +34,10 @@
 
 #define X_SP 2
 
-#define HAS_ZBA_ZBB ((TT_ARCH_VERSION >= 1) || (XLEN == 64))
-#define HAS_ZBC (XLEN == 64)
-#define HAS_ZBS (XLEN == 64)
+// Full-system RV64 currently does not support bitmanip
+#define HAS_ZBA_ZBB (((TT_ARCH_VERSION >= 1) || (XLEN == 64)) && !TTSIM_RV64_SYSTEM)
+#define HAS_ZBC ((XLEN == 64) && !TTSIM_RV64_SYSTEM)
+#define HAS_ZBS ((XLEN == 64) && !TTSIM_RV64_SYSTEM)
 #define HAS_PACK_BREV8 ((TT_ARCH_VERSION >= 1) && (XLEN == 32)) // small subset of Zbkb that is in BH babyrisc
 
 using int_xlen_t = int_types<XLEN>::int_t;
@@ -222,7 +223,11 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu)(RiscvHartState *p_hart
         case (36 << 3) | 5: value = (src0 >> (src1 & (XLEN - 1))) & 1; break; // BEXT
         case (52 << 3) | 1: value = src0 ^ (uint_xlen_t(1) << (src1 & (XLEN - 1))); break; // BINV
 #endif
+#if !TTSIM_RV64_SYSTEM
         default: TTSIM_ERROR(UndefinedBehavior, "funct3=%d funct7=%d", funct3, funct7);
+#else
+        default: TTSIM_ERROR(UnimplementedFunctionality, "funct3=%d funct7=%d", funct3, funct7);
+#endif
     }
     if (r_dst) [[likely]] {
         p_hart->x_regs[r_dst] = value;
@@ -348,7 +353,11 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu_imm)(RiscvHartState *p_
                 case 0x480 ... 0x480 + XLEN-1: value = src & ~(uint_xlen_t(1) << (imm & (XLEN - 1))); break; // BCLRI
                 case 0x680 ... 0x680 + XLEN-1: value = src ^ (uint_xlen_t(1) << (imm & (XLEN - 1))); break; // BINVI
 #endif
+#if !TTSIM_RV64_SYSTEM
                 default: TTSIM_ERROR(UndefinedBehavior, "funct3=%d imm=0x%x", funct3, imm);
+#else
+                default: TTSIM_ERROR(UnimplementedFunctionality, "funct3=%d imm=0x%x", funct3, imm);
+#endif
             }
             break;
         case 2: value = int_xlen_t(src) < imm; break; // SLTI
@@ -376,12 +385,20 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu_imm)(RiscvHartState *p_
 #if TT_ARCH_VERSION == 1
                 case 0x680 ... 0x686: case 0x688 ... 0x697: case 0x699 ... 0x69F: TTSIM_ERROR(UnsupportedFunctionality, "GREVI was removed from final Bitmanip spec");
 #endif
+#if !TTSIM_RV64_SYSTEM
                 default: TTSIM_ERROR(UndefinedBehavior, "funct3=%d imm=0x%x", funct3, imm);
+#else
+                default: TTSIM_ERROR(UnimplementedFunctionality, "funct3=%d imm=0x%x", funct3, imm);
+#endif
             }
             break;
         case 6: value = src | imm; break; // ORI
         case 7: value = src & imm; break; // ANDI
+#if !TTSIM_RV64_SYSTEM
         default: TTSIM_ERROR(UndefinedBehavior, "funct3=%d", funct3);
+#else
+        default: TTSIM_ERROR(UnimplementedFunctionality, "funct3=%d", funct3);
+#endif
     }
     if (r_dst) [[likely]] {
         p_hart->x_regs[r_dst] = value;
@@ -867,7 +884,7 @@ template<class T> static void RV_XLEN_PREFIX(f_store)(RiscvHartState *p_hart, ui
 #elif XLEN == 64
     if constexpr ((sizeof(T) == 4) || (sizeof(T) == 8)) {
         rv64_fpu_store(p_hart, inst, sizeof(T));
-    } else { // Zfh/Q unsupported
+    } else {
         TTSIM_ERROR(UnimplementedFunctionality, "Zfh/Q are unsupported");
     }
 #else
@@ -1120,6 +1137,7 @@ static uint_xlen_t read_csr(RiscvHartState *p_hart, uint32_t csr) {
 #if XLEN == 64
         case CSR_MSTATUS: return p_hart->mstatus;
         case CSR_MIE: return p_hart->mie;
+        case CSR_MTVEC: return p_hart->mtvec;
         case CSR_MHARTID: return p_hart->riscv_id & 0x7FFFFFFF;
 #else
         case CSR_CFG0: return p_hart->chicken_bits;
@@ -1142,7 +1160,12 @@ static void write_csr(RiscvHartState *p_hart, uint32_t csr, uint_xlen_t data) {
             TTSIM_VERIFY(data == p_hart->mie, UnimplementedFunctionality, "mie: data=0x%llx", data);
             break;
         case CSR_MTVEC:
-            TTSIM_VERIFY(!(data & 3) && (data <= 0xFFFF), UnimplementedFunctionality, "mtvec: data=0x%llx", data); // XXX how many bits?
+            // XXX how many address bits are implemented?
+            if (!(data & 1)) { // direct mode (should be 4B aligned)
+                TTSIM_VERIFY(!(data & 3) && (data <= 0xFFFF), UnimplementedFunctionality, "mtvec: data=0x%llx", data);
+            } else { // vectored mode (should be 256B aligned)
+                TTSIM_VERIFY(!(data & 0xFE) && (data <= 0xFFFF), UnimplementedFunctionality, "mtvec: data=0x%llx", data);
+            }
             p_hart->mtvec = data;
             break;
 #else
@@ -1403,7 +1426,11 @@ static void RV_XLEN_PREFIX(tti)(RiscvHartState *p_hart, uint32_t inst) {
 #endif
 
 static void RV_XLEN_PREFIX(unimplemented)(RiscvHartState *p_hart, uint32_t inst) {
+#if !TTSIM_RV64_SYSTEM
     TTSIM_ERROR(UndefinedBehavior, "could not decode instruction inst=0x%x at pc=0x%llx", inst, uint64_t(p_hart->pc - 4));
+#else
+    TTSIM_ERROR(UnimplementedFunctionality, "could not decode instruction inst=0x%x at pc=0x%llx", inst, uint64_t(p_hart->pc - 4));
+#endif
 }
 
 #if XLEN == 64
@@ -1577,16 +1604,16 @@ static void RV_XLEN_PREFIX(c_misc_alu)(RiscvHartState *p_hart, uint32_t inst) {
         } else {
             p_hart->x_regs[r_dst] = int_xlen_t(p_hart->x_regs[r_dst]) >> imm;
         }
-    } else if (sel == 2) {
+    } else if (sel == 2) { // C.ANDI
         int32_t imm = bits<6,2>(inst) | (signed_bits<12,12>(inst) << 5);
         p_hart->x_regs[r_dst] = int_xlen_t(p_hart->x_regs[r_dst]) & int_xlen_t(imm);
-    } else { // inst[11:10] == 3
+    } else { // sel == 3
         uint32_t r_src = 8 | bits<4,2>(inst);
         if (!bits<12,12>(inst)) {
             switch (bits<6,5>(inst)) {
-                case 0: p_hart->x_regs[r_dst] -= p_hart->x_regs[r_src]; break;  // C.SUB
-                case 1: p_hart->x_regs[r_dst] ^= p_hart->x_regs[r_src]; break;  // C.XOR
-                case 2: p_hart->x_regs[r_dst] |= p_hart->x_regs[r_src]; break;  // C.OR
+                case 0: p_hart->x_regs[r_dst] -= p_hart->x_regs[r_src]; break; // C.SUB
+                case 1: p_hart->x_regs[r_dst] ^= p_hart->x_regs[r_src]; break; // C.XOR
+                case 2: p_hart->x_regs[r_dst] |= p_hart->x_regs[r_src]; break; // C.OR
                 default: p_hart->x_regs[r_dst] &= p_hart->x_regs[r_src]; break; // C.AND
             }
         } else {
@@ -1617,7 +1644,7 @@ static void RV_XLEN_PREFIX(c_jr_mv_ebreak_jalr_add)(RiscvHartState *p_hart, uint
     } else {
         if (r_src) { // C.MV
             p_hart->x_regs[r_dst] = p_hart->x_regs[r_src];
-        } else { // C.JR, using r_dst as the source
+        } else { // C.JR
             uint_xlen_t pc = p_hart->pc - 2; // pc is really pc_plus_2 here
             uint_xlen_t target_pc = p_hart->x_regs[r_dst] & ~uint_xlen_t(1); // always clear LSB
             branch_taken(p_hart, pc, target_pc);
@@ -1680,12 +1707,8 @@ static void RV_XLEN_PREFIX(c_sw)(RiscvHartState *p_hart, uint32_t inst) {
 
 static void RV_XLEN_PREFIX(c_beqz)(RiscvHartState *p_hart, uint32_t inst) {
     uint32_t r_src = 8 | bits<9,7>(inst);
-    int32_t imm = 0;
-    imm |= bits<4,3>(inst) << 1;
-    imm |= bits<11,10>(inst) << 3;
-    imm |= bits<2,2>(inst) << 5;
-    imm |= bits<6,5>(inst) << 6;
-    imm |= signed_bits<12,12>(inst) << 8;
+    int32_t imm = (bits<4,3>(inst) << 1) | (bits<11,10>(inst) << 3) | (bits<2,2>(inst) << 5) |
+                  (bits<6,5>(inst) << 6) | (signed_bits<12,12>(inst) << 8);
 
     uint_xlen_t src = p_hart->x_regs[r_src];
     uint_xlen_t pc = p_hart->pc - 2; // pc is really pc_plus_2 here
@@ -1730,12 +1753,8 @@ static void RV_XLEN_PREFIX(c_sd)(RiscvHartState *p_hart, uint32_t inst) {
 
 static void RV_XLEN_PREFIX(c_bnez)(RiscvHartState *p_hart, uint32_t inst) {
     uint32_t r_src = 8 | bits<9,7>(inst);
-    int32_t imm = 0;
-    imm |= bits<4,3>(inst) << 1;
-    imm |= bits<11,10>(inst) << 3;
-    imm |= bits<2,2>(inst) << 5;
-    imm |= bits<6,5>(inst) << 6;
-    imm |= signed_bits<12,12>(inst) << 8;
+    int32_t imm = (bits<4,3>(inst) << 1) | (bits<11,10>(inst) << 3) | (bits<2,2>(inst) << 5) |
+                  (bits<6,5>(inst) << 6) | (signed_bits<12,12>(inst) << 8);
 
     uint_xlen_t src = p_hart->x_regs[r_src];
     uint_xlen_t pc = p_hart->pc - 2; // pc is really pc_plus_2 here

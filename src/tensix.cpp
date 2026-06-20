@@ -3389,9 +3389,7 @@ TENSIX_EXECUTE_SFPSTORE() {
             value = denormals_as_zeros(value);
             write_dst16b(p_tensix, row, col, dst_encode_bf16(value >> 16));
         } else if (instr_mod0 == 3) {
-#if TT_ARCH_VERSION >= 1
             value = denormals_as_zeros(value);
-#endif
             write_dst32b(p_tensix, row, col, dst_encode_fp32(value));
         } else if (instr_mod0 == 4) {
             write_dst32b(p_tensix, row, col, dst_encode_fp32(value));
