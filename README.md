@@ -138,9 +138,9 @@ Build:
 ```
 
 Boot Linux (OpenSBI `fw_jump` firmware + a kernel `Image` + initramfs + a flattened device tree), e.g.
-a boot with a virtio-blk disk and an interactive console:
+an 8-hart SMP boot with a virtio-blk disk and an interactive console:
 ```bash
-src/_out/release_riscv64/ttsim -i \
+src/_out/release_riscv64/ttsim --harts 8 -i \
     --entry 0x80000000 --set-reg a0 0 --set-reg a1 0x88800000 \
     --load-bin fw_jump.bin 0x80000000 --load-bin Image      0x80200000 \
     --load-bin initrd.img  0x84000000 --load-bin board.dtb  0x88800000 \
@@ -150,8 +150,35 @@ src/_out/release_riscv64/ttsim -i \
 `-i` attaches the simulated UART console to your terminal. Ctrl-C is hooked and passed into the
 simulator, so use Ctrl-\ if you need to forcibly exit.
 
-`--harts N` can be used to select the number of harts, but this support is experimental and not
-fully validated. Note that your .dtb must declare more harts in order for Linux to use them.
+Note that your .dtb must declare more harts in order for Linux to use them.
+
+### Bringing up a Tenstorrent chip inside the guest
+ttsim-riscv64 can host a Tenstorrent AI accelerator: pass `--tt-device <libttsim.so>` and it `dlopen`s
+the chip model and presents it to the guest as a PCIe endpoint - an ECAM config region plus the chip's
+BAR windows - just as [ttsim-qemu](#running-ttsim-as-a-qemu-pci-device) does for QEMU. The guest device
+tree must declare a `pci-host-ecam-generic` bus at the ECAM base at `0x30000000`. Then
+[tt-kmd](https://github.com/tenstorrent/tt-kmd) binds to it and exposes `/dev/tenstorrent/0`, providing
+you with a entire simulated RISC-V computer with an AI hardware accelerator, running Linux - all in just
+a few hundred KB of total simulator code, and with no external dependencies beyond libc.
+
+```bash
+# Build the Wormhole chip model (libttsim.so) and the ttsim-riscv64 host system:
+./make.py src/_out/release_wh/libttsim.so src/_out/release_riscv64/ttsim
+
+# Boot Linux with the Wormhole chip attached over (simulated) PCIe -- the DTB declares the ECAM bus:
+src/_out/release_riscv64/ttsim -i \
+    --entry 0x80000000 --set-reg a0 0 --set-reg a1 0x88800000 \
+    --load-bin fw_jump.bin 0x80000000 --load-bin Image      0x80200000 \
+    --load-bin initrd.img  0x84000000 --load-bin board.dtb  0x88800000 \
+    --tt-device src/_out/release_wh/libttsim.so --disk disk.img
+```
+
+Make sure your disk.img is already pre-populated with `build-essential linux-headers-generic` and
+the tt-kmd source. Inside the guest, build and load `tt-kmd` exactly as for the QEMU path above:
+```bash
+cd tt-kmd && make
+sudo insmod tenstorrent.ko # surfaces /dev/tenstorrent/0
+```
 
 ## Known Issues
 **Fast dispatch is not sufficiently tested**. It is believed to be fully functional, but run-to-run
