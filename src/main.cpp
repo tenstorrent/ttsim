@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
     uint32_t timer_insns_per_tick = 25;
     uint64_t entry = 0x80000000ull;
     uint64_t dram_base = 0x80000000ull;
-    uint64_t dram_size = 0x40000000ull; // 1 GiB (per minimal.dts)
+    uint64_t dram_size = 0x40000000ull; // 1 GiB
     uint32_t num_harts = 1;
     LoadBin loads[MAX_LOAD_BINS];
     uint32_t num_loads = 0;

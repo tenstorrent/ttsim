@@ -43,6 +43,7 @@ struct Rv64HartState {
 
 #define TENSIX_INST_PIPES 3
 #define TENSIX_INST_FIFO_SIZE 512
+#define REPLAY_BUF_SIZE 32
 #define SRC_ROWS 64
 #define DST_ROWS 1024
 #define ROW_SIZE 16
@@ -276,7 +277,7 @@ struct TensixState {
 
     uint16_t mop_zmask_hi16[TENSIX_INST_PIPES];
     uint32_t mop_cfg[TENSIX_INST_PIPES][9];
-    uint32_t replay_buf[TENSIX_INST_PIPES][32];
+    uint32_t replay_buf[TENSIX_INST_PIPES][REPLAY_BUF_SIZE];
     uint32_t replay_index[TENSIX_INST_PIPES];
     uint32_t replay_left[TENSIX_INST_PIPES];
     bool replay_execute_while_loading[TENSIX_INST_PIPES];
@@ -394,6 +395,7 @@ struct TensixTile {
     uint32_t overlay_stream_remote_dest_buf_space_available[TENSIX_NUM_NOC_OVERLAY_STREAMS];
     uint32_t dbg_array_rd_en;
     uint32_t dbg_array_rd_data;
+    uint32_t dbg_bus_ctrl;
     uint32_t tensix_creg_rddata;
     uint32_t soft_reset_0;
     uint32_t trisc0_reset_pc;

@@ -781,6 +781,111 @@ static void riscv_tdma_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t dat
     }
 }
 
+static inline void set_bits(uint32_t *array, uint32_t n_words, uint32_t shift, uint32_t data) {
+    uint32_t word = shift / 32;
+    array[word] |= uint64_t(data) << (shift & 31);
+    if (word + 1 < n_words) {
+        array[word + 1] |= uint64_t(data) >> (32 - (shift & 31));
+    }
+}
+
+static uint32_t debug_bus_rd_data(const TensixTile *p_tile) {
+    uint32_t ctrl = p_tile->dbg_bus_ctrl;
+    TTSIM_VERIFY((bits<29,29>(ctrl)), UnsupportedFunctionality, "DBG_BUS_CTRL must be enabled");
+    uint32_t signal_sel = bits<15,0>(ctrl);
+    uint32_t daisy_sel = bits<23,16>(ctrl);
+    uint32_t read32_sel = bits<26,25>(ctrl);
+
+    const TensixState *p_tensix = &p_tile->tensix[0];
+    uint32_t data[4] = {0};
+    if (daisy_sel == 6) {
+        if (signal_sel <= 5) { // ADCs
+            uint32_t which = signal_sel >> 1;
+            uint32_t channel = signal_sel & 1;
+            uint32_t pipe = (which == 2) ? 2 : 0; // always reads thread 2's ADCs for packer, thread 0's ADCs for both unpackers
+            const TensixAddrCtrl *p = &p_tensix->addr_ctrl[pipe][which];
+            set_bits(data, 4, 0,   channel ? p->ch1_x    : p->ch0_x);
+            set_bits(data, 4, 18,  channel ? p->ch1_x_cr : p->ch0_x_cr);
+            set_bits(data, 4, 64,  channel ? p->ch1_y    : p->ch0_y);
+            set_bits(data, 4, 80,  channel ? p->ch1_y_cr : p->ch0_y_cr);
+            set_bits(data, 4, 96,  channel ? p->ch1_z    : p->ch0_z);
+            set_bits(data, 4, 104, channel ? p->ch1_z_cr : p->ch0_z_cr);
+            set_bits(data, 4, 112, channel ? p->ch1_w    : p->ch0_w);
+            set_bits(data, 4, 120, channel ? p->ch1_w_cr : p->ch0_w_cr);
+            return data[read32_sel];
+        }
+        if (signal_sel == 9) { // SrcA/SrcB control
+            set_bits(data, 4, 84, !(p_tensix->src_a_valid & (1 << p_tensix->src_a_unpack_bank)));
+            set_bits(data, 4, 85, !!(p_tensix->src_a_valid & (1 << p_tensix->src_a_matrix_bank)));
+            // XXX may want to fill in bits 89:86 (slight variations on these other signals)
+            set_bits(data, 4, 90, !!(p_tensix->src_a_valid & 2));
+            set_bits(data, 4, 91, !!(p_tensix->src_a_valid & 1));
+            set_bits(data, 4, 92, p_tensix->src_a_matrix_bank);
+            set_bits(data, 4, 93, p_tensix->src_a_matrix_bank);
+            set_bits(data, 4, 94, p_tensix->src_a_unpack_bank);
+#if TT_ARCH_VERSION == 0
+            set_bits(data, 4, 100, !(p_tensix->src_b_valid & (1 << p_tensix->src_b_unpack_bank)));
+            set_bits(data, 4, 101, !!(p_tensix->src_b_valid & (1 << p_tensix->src_b_matrix_bank)));
+            // XXX may want to fill in bits 105:102 (slight variations on these other signals)
+            set_bits(data, 4, 106, !!(p_tensix->src_b_valid & 2));
+            set_bits(data, 4, 107, !!(p_tensix->src_b_valid & 1));
+            set_bits(data, 4, 108, p_tensix->src_b_matrix_bank);
+            set_bits(data, 4, 109, p_tensix->src_b_matrix_bank);
+            set_bits(data, 4, 110, p_tensix->src_b_unpack_bank);
+#else
+            set_bits(data, 4, 100, p_tensix->src_b_matrix_bank);
+            set_bits(data, 4, 101, p_tensix->src_b_matrix_bank);
+            set_bits(data, 4, 102, p_tensix->src_b_unpack_bank);
+            // XXX may want to fill in bits 104:103 (slight variations on these other signals)
+            set_bits(data, 4, 105, !!(p_tensix->src_b_valid & 1));
+            set_bits(data, 4, 106, !!(p_tensix->src_b_valid & 2));
+#endif
+            return data[read32_sel];
+        }
+    } else if (daisy_sel == 3) {
+        if (signal_sel == 4) { // fidelity phases
+            constexpr uint32_t FIDELITY_BASE_BIT = TT_ARCH_VERSION ? 60 : 62;
+            for (uint32_t pipe = 0; pipe < 3; pipe++) {
+                set_bits(data, 4, FIDELITY_BASE_BIT + 2*pipe, p_tensix->fidelity[pipe]);
+            }
+            return data[read32_sel];
+        }
+#if TT_ARCH_VERSION == 0
+        if (signal_sel == 2) { // RWCs
+            for (uint32_t pipe = 0; pipe < 3; pipe++) {
+                set_bits(data, 4, 16*pipe,      p_tensix->src_a_rwc[pipe]);
+                set_bits(data, 4, 16*pipe + 8,  p_tensix->src_a_rwc_cr[pipe]);
+                set_bits(data, 4, 16*pipe + 48, p_tensix->src_b_rwc[pipe]);
+                set_bits(data, 4, 16*pipe + 56, p_tensix->src_b_rwc_cr[pipe]);
+            }
+            set_bits(data, 4, 96,  p_tensix->dst_rwc[0]);
+            set_bits(data, 4, 112, p_tensix->dst_rwc_cr[0]);
+            return data[read32_sel];
+        } else if (signal_sel == 3) {
+            set_bits(data, 4, 0,  p_tensix->dst_rwc[1]);
+            set_bits(data, 4, 16, p_tensix->dst_rwc_cr[1]);
+            set_bits(data, 4, 32, p_tensix->dst_rwc[2]);
+            set_bits(data, 4, 48, p_tensix->dst_rwc_cr[2]);
+            return data[read32_sel];
+        }
+#else
+        if ((signal_sel == 2) || (signal_sel == 3)) { // RWCs
+            uint32_t dbus[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+            for (uint32_t pipe = 0; pipe < 3; pipe++) {
+                set_bits(dbus, 8, 16*pipe,       p_tensix->src_a_rwc[pipe]);
+                set_bits(dbus, 8, 16*pipe + 8,   p_tensix->src_a_rwc_cr[pipe]);
+                set_bits(dbus, 8, 16*pipe + 60,  p_tensix->src_b_rwc[pipe]);
+                set_bits(dbus, 8, 16*pipe + 68,  p_tensix->src_b_rwc_cr[pipe]);
+                set_bits(dbus, 8, 20*pipe + 120, p_tensix->dst_rwc[pipe]);
+                set_bits(dbus, 8, 20*pipe + 130, p_tensix->dst_rwc_cr[pipe]);
+            }
+            return dbus[((signal_sel == 3) ? 4 : 0) + read32_sel];
+        }
+#endif
+    }
+    TTSIM_ERROR(UnimplementedFunctionality, "daisy_sel=%d signal_sel=%d read32_sel=%d", daisy_sel, signal_sel, read32_sel);
+}
+
 template<char tile_type>
 static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint32_t offset) {
     auto *p_tile = get_tile<tile_type>(tile_id);
@@ -795,7 +900,11 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
 #else
             TTSIM_ERROR(UnimplementedFunctionality, "DBG_ARRAY_RD_DATA");
 #endif
-        case RISCV_DEBUG_REGS_DBG_RD_DATA: TTSIM_ERROR(UnimplementedFunctionality, "DBG_RD_DATA");
+        case RISCV_DEBUG_REGS_DBG_RD_DATA:
+            if constexpr (tile_type == 'T') {
+                return debug_bus_rd_data(p_tile);
+            }
+            TTSIM_ERROR(UnsupportedFunctionality, "DBG_RD_DATA in eth tile");
         case RISCV_DEBUG_REGS_DBG_INSTRN_BUF_STATUS: TTSIM_ERROR(UnimplementedFunctionality, "DBG_INSTRN_BUF_STATUS");
         case RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE:
             if constexpr (tile_type == 'T') {
@@ -817,6 +926,21 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
                 return p_tile->trisc_reset_pc_override;
             }
             TTSIM_ERROR(UnsupportedFunctionality, "TRISC_RESET_PC_OVERRIDE in eth tile");
+        case RISCV_DEBUG_REGS_TRISC0_RESET_PC:
+            if constexpr (tile_type == 'T') {
+                return p_tile->trisc0_reset_pc;
+            }
+            TTSIM_ERROR(UnsupportedFunctionality, "TRISC0_RESET_PC in eth tile");
+        case RISCV_DEBUG_REGS_TRISC1_RESET_PC:
+            if constexpr (tile_type == 'T') {
+                return p_tile->trisc1_reset_pc;
+            }
+            TTSIM_ERROR(UnsupportedFunctionality, "TRISC1_RESET_PC in eth tile");
+        case RISCV_DEBUG_REGS_TRISC2_RESET_PC:
+            if constexpr (tile_type == 'T') {
+                return p_tile->trisc2_reset_pc;
+            }
+            TTSIM_ERROR(UnsupportedFunctionality, "TRISC2_RESET_PC in eth tile");
 #endif
         RISCV_DEBUG_REGS_RD_DEFAULT_CASES()
         default: TTSIM_ERROR(UndefinedBehavior, "offset=0x%x", offset);
@@ -826,7 +950,10 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
 static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t offset, uint32_t data) {
     TensixTile *p_tile = &g_t_tiles[tile_id];
     switch (offset) {
-        case RISCV_DEBUG_REGS_DBG_BUS_CTRL: TTSIM_ERROR(UnimplementedFunctionality, "DBG_BUS_CTRL");
+        case RISCV_DEBUG_REGS_DBG_BUS_CTRL:
+            TTSIM_VERIFY(!(data & 0xD9000000), UnsupportedFunctionality, "reserved bit set in DBG_BUS_CTRL=0x%x", data);
+            p_tile->dbg_bus_ctrl = data;
+            break;
         case RISCV_DEBUG_REGS_TENSIX_CREG_READ:
             TTSIM_VERIFY(data < TENSIX_CFG_STATE_SIZE*4, UnimplementedFunctionality,
                 "TENSIX_CREG_READ: data=0x%x", data);
@@ -1611,12 +1738,13 @@ static void tensix_regfile_wr32(uint32_t tile_id, uint32_t riscv_id, uint32_t of
 }
 
 // XXX we do not call tensix_can_push_inst in this path, so this can currently overflow the FIFO
-static void tensix_inst_wr32(uint32_t tile_id, uint32_t riscv_id, uint32_t offset, uint32_t data) {
+static void tensix_inst_wr32(uint32_t tile_id, uint32_t riscv_id, uint32_t pipe_aperture, uint32_t offset, uint32_t data) {
     TTSIM_VERIFY(!offset, UnimplementedFunctionality, "offset=0x%x", offset);
     TensixTile *p_tile = &g_t_tiles[tile_id];
     if (riscv_id == RV32_ID_BRISC) {
-        return tensix_push_inst(&p_tile->tensix[0], 0, data, true); // this is the aperture for use pipe 0, and bypass MOP expander
+        return tensix_push_inst(&p_tile->tensix[0], pipe_aperture, data, true); // bypasses MOP expander
     }
+    TTSIM_VERIFY(!pipe_aperture, UnsupportedFunctionality, "TENSIX_INST%d aperture only mapped for brisc", pipe_aperture);
     auto [tensix_id, pipe] = trisc_pipe(riscv_id);
     tensix_push_inst(&p_tile->tensix[tensix_id], pipe, data, false);
 }
@@ -1977,7 +2105,13 @@ static bool t_tile_mmio_wr32(uint32_t tile_id, uint32_t riscv_id, uint64_t addr,
             tensix_regfile_wr32(tile_id, riscv_id, addr - TENSIX_REGFILE_BASE, data);
             return true;
         case TENSIX_INST_BASE ... TENSIX_INST_LIMIT:
-            tensix_inst_wr32(tile_id, riscv_id, addr - TENSIX_INST_BASE, data);
+            tensix_inst_wr32(tile_id, riscv_id, 0, addr - TENSIX_INST_BASE, data);
+            return true;
+        case TENSIX_INST1_BASE ... TENSIX_INST1_LIMIT:
+            tensix_inst_wr32(tile_id, riscv_id, 1, addr - TENSIX_INST1_BASE, data);
+            return true;
+        case TENSIX_INST2_BASE ... TENSIX_INST2_LIMIT:
+            tensix_inst_wr32(tile_id, riscv_id, 2, addr - TENSIX_INST2_BASE, data);
             return true;
         case TENSIX_PC_BUF_BASE ... TENSIX_PC_BUF_LIMIT:
             tensix_pc_buf_wr32(tile_id, riscv_id, addr - TENSIX_PC_BUF_BASE, data);

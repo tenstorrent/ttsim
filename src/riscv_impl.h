@@ -727,11 +727,6 @@ template<class T> static void RV_XLEN_PREFIX(atomic)(RiscvHartState *p_hart, uin
 #if TT_ARCH_VERSION == 0
     TTSIM_ERROR(UndefinedBehavior, "Wormhole does not support Zaamo");
 #else
-#if !TTSIM_RV64_SYSTEM
-    if constexpr (sizeof(T) == 8) {
-        TTSIM_ERROR(UntestedFunctionality, "64-bit atomic");
-    }
-#endif
     uint32_t funct5 = bits<31,27>(inst); // aq/rl flags are ignored
     uint32_t r_addr = bits<19,15>(inst);
     uint32_t r_src = bits<24,20>(inst);
@@ -833,6 +828,9 @@ template<class T> static void RV_XLEN_PREFIX(atomic)(RiscvHartState *p_hart, uin
         case 0x1C: mem_wr<T>(p_sram, std::max(old_val, src_val)); break; // AMOMAXU
         default: TTSIM_ERROR(UndefinedBehavior, "funct5=%d", funct5);
     }
+#if XLEN == 32
+    dcache_invalidate(p_hart); // AMO flushes the D$ (like a fence)
+#endif
 #endif
 
     if (r_dst) {
@@ -1256,7 +1254,6 @@ static void RV_XLEN_PREFIX(csrrw)(RiscvHartState *p_hart, uint32_t inst) {
     uint32_t r_dst = bits<11,7>(inst);
     TTSIM_VERIFY(!r_dst, UntestedFunctionality, "r_dst=%d", r_dst);
     uint32_t r_src = bits<19,15>(inst);
-    TTSIM_VERIFY(r_src, UntestedFunctionality, "r_src=%d", r_src);
     uint32_t csr = bits<31,20>(inst);
 
     if (r_dst) {
@@ -1320,8 +1317,8 @@ static void RV_XLEN_PREFIX(csrrwi)(RiscvHartState *p_hart, uint32_t inst) {
 #elif TTSIM_RV64_SYSTEM
     rv64_csr_op(p_hart, inst, bits<19,15>(inst), true, 0);
 #else
-    TTSIM_ERROR_NOFMT(UntestedFunctionality);
     uint32_t r_dst = bits<11,7>(inst);
+    TTSIM_VERIFY(!r_dst, UntestedFunctionality, "r_dst=%d", r_dst);
     uint32_t imm = bits<19,15>(inst);
     uint32_t csr = bits<31,20>(inst);
 

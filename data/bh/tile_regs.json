@@ -808,19 +808,19 @@
         },
         {
           "offset": "0x228",
-          "rw": "wo",
+          "rw": "rw",
           "reset_value": null,
           "name": "trisc0_reset_pc"
         },
         {
           "offset": "0x22C",
-          "rw": "wo",
+          "rw": "rw",
           "reset_value": null,
           "name": "trisc1_reset_pc"
         },
         {
           "offset": "0x230",
-          "rw": "wo",
+          "rw": "rw",
           "reset_value": null,
           "name": "trisc2_reset_pc"
         },
