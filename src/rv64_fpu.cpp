@@ -53,6 +53,7 @@ static inline uint32_t hostfp_round_bits(uint32_t rm) {
         default: TTSIM_ERROR(AssertionFailure, "fp-rm=%u", rm);
     }
 }
+
 static __attribute__((noinline)) void fp_begin(uint32_t rm) {
     s_saved_mxcsr = hostfp_status_read();
     uint32_t mxcsr = s_saved_mxcsr;
@@ -308,7 +309,8 @@ struct SoftFloat {
                 u.exp -= sh;
             }
         } else {
-            u.exp = int(ef) - BIAS; u.mant = mf | (U2(1) << MB); // normal (implicit bit)
+            u.exp = int(ef) - BIAS;
+            u.mant = mf | (U2(1) << MB); // normal (implicit bit)
         }
         return u;
     }
@@ -527,57 +529,90 @@ static uint32_t hostfp_add_s(uint32_t a, uint32_t b, uint32_t rm, uint32_t *fl, 
 
 static uint64_t hostfp_add_d(uint64_t a, uint64_t b, uint32_t rm, uint32_t *fl, bool sub) {
     double fa = std::bit_cast<double>(a), fb = std::bit_cast<double>(b);
-    fp_begin(rm); double r = sub ? fa - fb : fa + fb; *fl |= fp_end_flags(); return hostfp_result_d(r);
+    fp_begin(rm);
+    double r = sub ? fa - fb : fa + fb;
+    *fl |= fp_end_flags();
+    return hostfp_result_d(r);
 }
 
 static uint32_t hostfp_mul_s(uint32_t a, uint32_t b, uint32_t rm, uint32_t *fl) {
     float fa = std::bit_cast<float>(a), fb = std::bit_cast<float>(b);
-    fp_begin(rm); float r = fa * fb; *fl |= fp_end_flags(); return hostfp_result_s(r);
+    fp_begin(rm);
+    float r = fa * fb;
+    *fl |= fp_end_flags();
+    return hostfp_result_s(r);
 }
 
 static uint64_t hostfp_mul_d(uint64_t a, uint64_t b, uint32_t rm, uint32_t *fl) {
     double fa = std::bit_cast<double>(a), fb = std::bit_cast<double>(b);
-    fp_begin(rm); double r = fa * fb; *fl |= fp_end_flags(); return hostfp_result_d(r);
+    fp_begin(rm);
+    double r = fa * fb;
+    *fl |= fp_end_flags();
+    return hostfp_result_d(r);
 }
 
 static uint32_t hostfp_div_s(uint32_t a, uint32_t b, uint32_t rm, uint32_t *fl) {
     float fa = std::bit_cast<float>(a), fb = std::bit_cast<float>(b);
-    fp_begin(rm); float r = fa / fb; *fl |= fp_end_flags(); return hostfp_result_s(r);
+    fp_begin(rm);
+    float r = fa / fb;
+    *fl |= fp_end_flags();
+    return hostfp_result_s(r);
 }
 
 static uint64_t hostfp_div_d(uint64_t a, uint64_t b, uint32_t rm, uint32_t *fl) {
     double fa = std::bit_cast<double>(a), fb = std::bit_cast<double>(b);
-    fp_begin(rm); double r = fa / fb; *fl |= fp_end_flags(); return hostfp_result_d(r);
+    fp_begin(rm);
+    double r = fa / fb;
+    *fl |= fp_end_flags();
+    return hostfp_result_d(r);
 }
 
 static uint32_t hostfp_sqrt_s(uint32_t a, uint32_t rm, uint32_t *fl) {
     float fa = std::bit_cast<float>(a);
-    fp_begin(rm); float r = fp_sqrt_s(fa); *fl |= fp_end_flags(); return hostfp_result_s(r);
+    fp_begin(rm);
+    float r = fp_sqrt_s(fa);
+    *fl |= fp_end_flags();
+    return hostfp_result_s(r);
 }
 
 static uint64_t hostfp_sqrt_d(uint64_t a, uint32_t rm, uint32_t *fl) {
     double fa = std::bit_cast<double>(a);
-    fp_begin(rm); double r = fp_sqrt_d(fa); *fl |= fp_end_flags(); return hostfp_result_d(r);
+    fp_begin(rm);
+    double r = fp_sqrt_d(fa);
+    *fl |= fp_end_flags();
+    return hostfp_result_d(r);
 }
 
 static uint32_t hostfp_fma_s(uint32_t a, uint32_t b, uint32_t c, uint32_t rm, uint32_t *fl) {
     float fa = std::bit_cast<float>(a), fb = std::bit_cast<float>(b), fc = std::bit_cast<float>(c);
-    fp_begin(rm); float r = fp_fma_s(fa, fb, fc); *fl |= fp_end_flags(); return hostfp_result_s(r);
+    fp_begin(rm);
+    float r = fp_fma_s(fa, fb, fc);
+    *fl |= fp_end_flags();
+    return hostfp_result_s(r);
 }
 
 static uint64_t hostfp_fma_d(uint64_t a, uint64_t b, uint64_t c, uint32_t rm, uint32_t *fl) {
     double fa = std::bit_cast<double>(a), fb = std::bit_cast<double>(b), fc = std::bit_cast<double>(c);
-    fp_begin(rm); double r = fp_fma_d(fa, fb, fc); *fl |= fp_end_flags(); return hostfp_result_d(r);
+    fp_begin(rm);
+    double r = fp_fma_d(fa, fb, fc);
+    *fl |= fp_end_flags();
+    return hostfp_result_d(r);
 }
 
 static uint32_t hostfp_cvt_s_d(uint64_t d, uint32_t rm, uint32_t *fl) { // FCVT.S.D : double -> single
     double x = std::bit_cast<double>(d);
-    fp_begin(rm); float r = float(x); *fl |= fp_end_flags(); return hostfp_result_s(r);
+    fp_begin(rm);
+    float r = float(x);
+    *fl |= fp_end_flags();
+    return hostfp_result_s(r);
 }
 
 static uint64_t hostfp_cvt_d_s(uint32_t f, uint32_t rm, uint32_t *fl) { // FCVT.D.S : single -> double
     float x = std::bit_cast<float>(f);
-    fp_begin(rm); double r = double(x); *fl |= fp_end_flags(); return hostfp_result_d(r);
+    fp_begin(rm);
+    double r = double(x);
+    *fl |= fp_end_flags();
+    return hostfp_result_d(r);
 }
 
 static uint64_t hostfp_to_int_s(uint32_t a, uint32_t rm, uint32_t *fl, int bits, bool sgn) {
@@ -827,7 +862,8 @@ void rv64_fpu_op(Rv64SysHartState *h, uint32_t inst) {
         case 0x20: h->f_regs[r_dst] = box32(hostfp_cvt_s_d(d64a, rm, &fl)); break;            // FCVT.S.D
         case 0x21: h->f_regs[r_dst] = hostfp_cvt_d_s(s32a, rm, &fl); break;                   // FCVT.D.S
         case 0x60: case 0x61: { // FCVT.{W,WU,L,LU}.{S,D}
-            int bits = (r2 & 2) ? 64 : 32; bool sgn = !(r2 & 1);
+            int bits = (r2 & 2) ? 64 : 32;
+            bool sgn = !(r2 & 1);
             // Always run the conversion: rd=x0 suppresses only the integer writeback, NOT the fflags
             // side effects (NV/NX on invalid/overflow/inexact still update fcsr).
             uint64_t iv = is_double ? hostfp_to_int_d(d64a, rm, &fl, bits, sgn)

@@ -1105,7 +1105,8 @@ static __attribute__((noinline)) bool translate_slow(Rv64SysHartState *h, uint64
             return false;
         }
         uint64_t vpn[3] = {(vaddr >> 12) & 0x1FF, (vaddr >> 21) & 0x1FF, (vaddr >> 30) & 0x1FF};
-        uint64_t pte = 0, pte_addr = 0; uint32_t level = 0;
+        uint64_t pte = 0, pte_addr = 0;
+        uint32_t level = 0;
         uint64_t a = (h->satp & ((1ull << 44) - 1)) << 12; // root page table physical address
         bool found = false;
         for (int lv = 2; lv >= 0; lv--) {
@@ -1125,7 +1126,9 @@ static __attribute__((noinline)) bool translate_slow(Rv64SysHartState *h, uint64
                     rv64_sys_raise(h, fault_cause, vaddr);
                     return false;
                 }
-                level = uint32_t(lv); found = true; break;
+                level = uint32_t(lv);
+                found = true;
+                break;
             }
             a = (((pte >> 10) & ((1ull << 44) - 1)) << 12); // descend to next level
         }

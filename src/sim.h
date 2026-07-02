@@ -238,6 +238,7 @@ struct TensixConfigState {
     CFG112_REG_UNION()
     uint32_t cfg113; // XXX 128-bit register not supported by our flow
     CFG117_REG_UNION()
+    CFG119_REG_UNION()
     CFG120_REG_UNION()
     CFG121_REG_UNION()
     CFG124_REG_UNION()

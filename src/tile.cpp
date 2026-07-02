@@ -891,15 +891,11 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
     auto *p_tile = get_tile<tile_type>(tile_id);
     switch (offset) {
         case RISCV_DEBUG_REGS_DBG_ARRAY_RD_DATA:
-#if TT_ARCH_VERSION == 0
             if constexpr (tile_type == 'T') {
                 TTSIM_VERIFY(p_tile->dbg_array_rd_en, UnsupportedFunctionality, "DBG_ARRAY_RD_DATA when DBG_ARRAY_RD_EN=0");
                 return p_tile->dbg_array_rd_data;
             }
             TTSIM_ERROR(UnsupportedFunctionality, "DBG_ARRAY_RD_DATA in eth tile");
-#else
-            TTSIM_ERROR(UnimplementedFunctionality, "DBG_ARRAY_RD_DATA");
-#endif
         case RISCV_DEBUG_REGS_DBG_RD_DATA:
             if constexpr (tile_type == 'T') {
                 return debug_bus_rd_data(p_tile);
@@ -960,15 +956,10 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
             p_tile->tensix_creg_rddata = tensix_cfg_rd32(&p_tile->tensix[0], 0, 4*data);
             break;
         case RISCV_DEBUG_REGS_DBG_ARRAY_RD_EN:
-#if TT_ARCH_VERSION == 0
             TTSIM_VERIFY(data <= 1, UnsupportedFunctionality, "DBG_ARRAY_RD_EN: data=0x%x", data);
             p_tile->dbg_array_rd_en = data;
-#else
-            TTSIM_ERROR(UnimplementedFunctionality, "DBG_ARRAY_RD_EN");
-#endif
             break;
         case RISCV_DEBUG_REGS_DBG_ARRAY_RD_CMD: {
-#if TT_ARCH_VERSION == 0
             TTSIM_VERIFY(p_tile->dbg_array_rd_en, UnsupportedFunctionality, "DBG_ARRAY_RD_CMD when DBG_ARRAY_RD_EN=0");
             uint32_t row = bits<11,0>(data);
             uint32_t sel = bits<15,12>(data);
@@ -977,9 +968,6 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
             TTSIM_VERIFY(sel < 8, UnsupportedFunctionality, "DBG_ARRAY_RD_CMD: sel=%d", sel);
             TTSIM_VERIFY(upper == 2, MissingSpecification, "DBG_ARRAY_RD_CMD: upper=0x%x", upper);
             p_tile->dbg_array_rd_data = p_tile->tensix[0].dst[row][2*sel] | (uint32_t(p_tile->tensix[0].dst[row][2*sel+1]) << 16);
-#else
-            TTSIM_ERROR(UnimplementedFunctionality, "DBG_ARRAY_RD_CMD");
-#endif
             break;
         }
         case RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE:
@@ -1000,21 +988,16 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
                     switch (rv32_id) {
                         case RV32_ID_BRISC: reset_pc = 0; break; // reset PC for brisc is always zero
                         case RV32_ID_TRISC0:
-                            TTSIM_VERIFY(p_tile->trisc_reset_pc_override & 1, UntestedFunctionality, "trisc_reset_pc_override=0x%x", p_tile->trisc_reset_pc_override);
                             reset_pc = (p_tile->trisc_reset_pc_override & 1) ? p_tile->trisc0_reset_pc : 0x6000;
                             break;
                         case RV32_ID_TRISC1:
-                            TTSIM_VERIFY(p_tile->trisc_reset_pc_override & 2, UntestedFunctionality, "trisc_reset_pc_override=0x%x", p_tile->trisc_reset_pc_override);
                             reset_pc = (p_tile->trisc_reset_pc_override & 2) ? p_tile->trisc1_reset_pc : 0xA000;
                             break;
                         case RV32_ID_TRISC2:
-                            TTSIM_VERIFY(p_tile->trisc_reset_pc_override & 4, UntestedFunctionality, "trisc_reset_pc_override=0x%x", p_tile->trisc_reset_pc_override);
                             reset_pc = (p_tile->trisc_reset_pc_override & 4) ? p_tile->trisc2_reset_pc : 0xE000;
                             break;
                         case RV32_ID_NCRISC:
-                            TTSIM_VERIFY(p_tile->ncrisc_reset_pc_override == 1, UnimplementedFunctionality,
-                                "ncrisc_reset_pc_override=0x%x", p_tile->ncrisc_reset_pc_override);
-                            reset_pc = p_tile->ncrisc_reset_pc;
+                            reset_pc = (p_tile->ncrisc_reset_pc_override & 1) ? p_tile->ncrisc_reset_pc : 0x12000;
                             break;
                         default: TTSIM_ERROR(AssertionFailure, "rv32_id=%d", rv32_id);
                     }
@@ -2359,9 +2342,9 @@ static uint32_t arc_reset_unit_rd32(uint32_t offset) {
             return g_a_tile.arc_misc_cntl;
 #if TT_ARCH_VERSION == 0
         case RESET_UNIT_NOC_NODEID_X_0:
-            return ARC_TELEMETRY_TABLE_CSM_OFFSET;
+            return ARC_CSM_BASE + ARC_TELEMETRY_TABLE_CSM_OFFSET;
         case RESET_UNIT_NOC_NODEID_Y_0:
-            return ARC_TELEMETRY_VALUES_CSM_OFFSET;
+            return ARC_CSM_BASE + ARC_TELEMETRY_VALUES_CSM_OFFSET;
         case RESET_UNIT_ARC_MSG_QCB_PTR:
             return 0; // indicates firmware does not support ARC msg queue
 #elif TT_ARCH_VERSION == 1

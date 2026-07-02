@@ -288,7 +288,7 @@ uint32_t tensix_cfg_rd32(TensixState *p_tensix, uint32_t bank, uint32_t offset) 
         CFG_REG_BANKED_RD(113)
         case 114: return 0;
         case 115: return 0;
-        case 119: return 0;
+        CFG_REG_BANKED_RD(119)
         CFG_REG_BANKED_RD(120)
         CFG_REG_BANKED_RD(121)
         case 122: return 0;
@@ -432,7 +432,7 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
         CFG_REG_BANKED_WR(112)
         case 113: p_tensix->config[bank].cfg113 = data; break;
         case 114 ... 115: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
-        case 119: TTSIM_VERIFY(!data, UnimplementedFunctionality, "reg=%d data=0x%x", reg, data); break;
+        CFG_REG_BANKED_WR(119)
         CFG_REG_BANKED_WR(120)
         CFG_REG_BANKED_WR(121)
         case 122 ... 123: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
@@ -476,6 +476,14 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
     TTSIM_VERIFY(!p_config->ALU_ROUNDING_MODE_Padding, UnsupportedFunctionality, "ALU_ROUNDING_MODE_Padding");
     TTSIM_VERIFY(!p_config->ALU_ROUNDING_MODE_GS_LF, UnsupportedFunctionality, "ALU_ROUNDING_MODE_GS_LF");
     TTSIM_VERIFY(!p_config->ALU_ROUNDING_MODE_Bfp8_HF, UnsupportedFunctionality, "ALU_ROUNDING_MODE_Bfp8_HF");
+#if TT_ARCH_VERSION == 1
+    TTSIM_VERIFY(!p_config->THCON_SEC1_REG1_Downsample_mask, UnsupportedFunctionality, "THCON_SEC1_REG1_Downsample_mask");
+    TTSIM_VERIFY(!p_config->THCON_SEC1_REG1_Downsample_rate, UnsupportedFunctionality, "THCON_SEC1_REG1_Downsample_rate");
+    TTSIM_VERIFY(!p_config->THCON_SEC1_REG1_Pack_L1_Acc, UnsupportedFunctionality, "THCON_SEC1_REG1_Pack_L1_Acc");
+    TTSIM_VERIFY(!p_config->THCON_SEC1_REG1_Exp_threshold_en, UnsupportedFunctionality, "THCON_SEC1_REG1_Exp_threshold_en");
+    TTSIM_VERIFY(!p_config->THCON_SEC1_REG1_Pac_LF8_4b_exp, UnsupportedFunctionality, "THCON_SEC1_REG1_Pac_LF8_4b_exp");
+    TTSIM_VERIFY(!p_config->THCON_SEC1_REG1_Exp_threshold, UnsupportedFunctionality, "THCON_SEC1_REG1_Exp_threshold");
+#endif
 }
 
 static inline uint32_t get_state_id(TensixState *p_tensix, uint32_t pipe) {
@@ -676,7 +684,7 @@ TENSIX_EXECUTE_MOVD2A() {
 
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
-    // XXX no FP16A_FORCE_Enable
+    // Note: FP16A_FORCE_Enable (thread_cfg56/55) is not instantiated and errors on write; always 0
     TTSIM_VERIFY(!p_config->ALU_FORMAT_SPEC_REG_SrcA_override, UnsupportedFunctionality, "ALU_FORMAT_SPEC_REG_SrcA_override");
     uint32_t src_a_fmt = p_config->ALU_FORMAT_SPEC_REG0_SrcA;
 #if TT_ARCH_VERSION >= 1
@@ -690,7 +698,7 @@ TENSIX_EXECUTE_MOVD2A() {
 
     uint32_t src_a_row = src + p_tensix->src_a_rwc[pipe];
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dst + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
-    // XXX no DEST_REGW_BASE_Base
+    // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     dst_row &= DST_ROWS-1;
     TTSIM_VERIFY(!(src_a_row & 3) && (src_a_row < SRC_ROWS), UnsupportedFunctionality, "src_a_row=%d", src_a_row);
     TTSIM_VERIFY(!(dst_row & 3), UnimplementedFunctionality, "dst_row=%d", dst_row);
@@ -733,7 +741,7 @@ TENSIX_EXECUTE_MOVD2B() {
 
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
-    // XXX no FP16A_FORCE_Enable
+    // Note: FP16A_FORCE_Enable (thread_cfg56/55) is not instantiated and errors on write; always 0
     uint32_t src_a_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcA_override ? p_config->ALU_FORMAT_SPEC_REG_SrcA_val : p_config->ALU_FORMAT_SPEC_REG0_SrcA;
 #if TT_ARCH_VERSION >= 1
     if (!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCA_FMT_Base) {
@@ -747,7 +755,7 @@ TENSIX_EXECUTE_MOVD2B() {
 
     uint32_t src_b_row = src + p_tensix->src_b_rwc[pipe];
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dst + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
-    // XXX no DEST_REGW_BASE_Base
+    // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     dst_row &= DST_ROWS-1;
     TTSIM_VERIFY(!(src_b_row & 3) && (src_b_row < SRC_ROWS), UnsupportedFunctionality, "src_b_row=%d", src_b_row);
     TTSIM_VERIFY(!(dst_row & 3), UnimplementedFunctionality, "dst_row=%d", dst_row);
@@ -821,7 +829,7 @@ TENSIX_EXECUTE_ZEROACC() {
 
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
-    // XXX no DEST_REGW_BASE_Base
+    // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     uint32_t dst_offset = p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset + p_tensix->dst_rwc[pipe];
     switch (clear_mode) {
         case 0: // clear 1 row
@@ -923,7 +931,7 @@ TENSIX_EXECUTE_MOVA2D() {
 
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
-    // XXX no FP16A_FORCE_Enable
+    // Note: FP16A_FORCE_Enable (thread_cfg56/55) is not instantiated and errors on write; always 0
     uint32_t src_a_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcA_override ? p_config->ALU_FORMAT_SPEC_REG_SrcA_val : p_config->ALU_FORMAT_SPEC_REG0_SrcA;
 #if TT_ARCH_VERSION >= 1
     if (!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCA_FMT_Base) {
@@ -942,7 +950,7 @@ TENSIX_EXECUTE_MOVA2D() {
 
     uint32_t src_a_row = src + p_tensix->src_a_rwc[pipe];
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dst + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
-    // XXX no DEST_REGW_BASE_Base
+    // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     dst_row &= DST_ROWS-1;
     TTSIM_VERIFY(!(src_a_row & 7) && (src_a_row < SRC_ROWS), UnimplementedFunctionality, "invalid src_a_row=%d", src_a_row);
     TTSIM_VERIFY(!(dst_row & 7), UnimplementedFunctionality, "invalid dst_row=%d", dst_row);
@@ -990,7 +998,7 @@ TENSIX_EXECUTE_MOVB2D() {
 
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
-    // XXX no FP16A_FORCE_Enable
+    // Note: FP16A_FORCE_Enable (thread_cfg56/55) is not instantiated and errors on write; always 0
     uint32_t src_a_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcA_override ? p_config->ALU_FORMAT_SPEC_REG_SrcA_val : p_config->ALU_FORMAT_SPEC_REG0_SrcA;
     uint32_t src_b_fmt = p_config->ALU_FORMAT_SPEC_REG1_SrcB;
 #if TT_ARCH_VERSION >= 1
@@ -1013,7 +1021,7 @@ TENSIX_EXECUTE_MOVB2D() {
 
     uint32_t src_b_row = src + p_tensix->src_b_rwc[pipe];
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dst + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
-    // XXX no DEST_REGW_BASE_Base
+    // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     dst_row &= DST_ROWS-1;
     uint32_t n_rows = (instr_mod & 2) ? 8 : 4;
     TTSIM_VERIFY(!(src_b_row & (n_rows - 1)) && (src_b_row < SRC_ROWS), UnimplementedFunctionality, "invalid src_b_row=%d", src_b_row);
@@ -1400,16 +1408,18 @@ static bool tensix_matmul_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst,
 
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
-    // XXX no FP16A_FORCE_Enable
+    // Note: FP16A_FORCE_Enable (thread_cfg56/55) is not instantiated and errors on write; always 0
     bool is_int8 = p_config->ALU_ACC_CTRL_INT8_math_enabled;
     TTSIM_VERIFY(!p_config->ALU_FORMAT_SPEC_REG_SrcA_override, UnsupportedFunctionality, "ALU_FORMAT_SPEC_REG_SrcA_override");
     uint32_t src_a_fmt = p_config->ALU_FORMAT_SPEC_REG0_SrcA;
     uint32_t src_b_fmt = p_config->ALU_FORMAT_SPEC_REG1_SrcB;
 #if TT_ARCH_VERSION >= 1
-    TTSIM_VERIFY(!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCA_FMT_Base, UnimplementedFunctionality, "DISABLE_IMPLIED_SRCA_FMT_Base");
-    TTSIM_VERIFY(!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCB_FMT_Base, UnimplementedFunctionality, "DISABLE_IMPLIED_SRCB_FMT_Base");
-    src_a_fmt = p_tensix->src_a_format[src_a_bank];
-    src_b_fmt = p_tensix->src_b_format[src_b_bank];
+    if (!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCA_FMT_Base) {
+        src_a_fmt = p_tensix->src_a_format[src_a_bank];
+    }
+    if (!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCB_FMT_Base) {
+        src_b_fmt = p_tensix->src_b_format[src_b_bank];
+    }
 #endif
     if (is_int8) {
         TTSIM_VERIFY(src_a_fmt == 14, UnsupportedFunctionality, "int8 src_a_fmt=%d src_b_fmt=%d", src_a_fmt, src_b_fmt);
@@ -1428,7 +1438,7 @@ static bool tensix_matmul_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst,
     uint32_t src_a_row = p_tensix->src_a_rwc[pipe];
     uint32_t src_b_row = p_tensix->src_b_rwc[pipe];
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dst + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
-    // XXX no DEST_REGW_BASE_Base
+    // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     dst_row &= DST_ROWS-1;
     constexpr uint32_t N_ROWS = is_gapool ? 4 : 8;
     TTSIM_VERIFY(!(src_a_row & 15) && (src_a_row < SRC_ROWS), UnsupportedFunctionality, "src_a_row=%d", src_a_row);
@@ -1551,16 +1561,18 @@ static bool tensix_elw_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst, ui
 
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
-    // XXX no FP16A_FORCE_Enable
+    // Note: FP16A_FORCE_Enable (thread_cfg56/55) is not instantiated and errors on write; always 0
     bool is_int8 = p_config->ALU_ACC_CTRL_INT8_math_enabled;
     TTSIM_VERIFY(!p_config->ALU_FORMAT_SPEC_REG_SrcA_override, UnsupportedFunctionality, "ALU_FORMAT_SPEC_REG_SrcA_override");
     uint32_t src_a_fmt = p_config->ALU_FORMAT_SPEC_REG0_SrcA;
     uint32_t src_b_fmt = p_config->ALU_FORMAT_SPEC_REG1_SrcB;
 #if TT_ARCH_VERSION >= 1
-    TTSIM_VERIFY(!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCA_FMT_Base, UnimplementedFunctionality, "DISABLE_IMPLIED_SRCA_FMT_Base");
-    TTSIM_VERIFY(!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCB_FMT_Base, UnimplementedFunctionality, "DISABLE_IMPLIED_SRCB_FMT_Base");
-    src_a_fmt = p_tensix->src_a_format[src_a_bank];
-    src_b_fmt = p_tensix->src_b_format[src_b_bank];
+    if (!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCA_FMT_Base) {
+        src_a_fmt = p_tensix->src_a_format[src_a_bank];
+    }
+    if (!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCB_FMT_Base) {
+        src_b_fmt = p_tensix->src_b_format[src_b_bank];
+    }
 #endif
     if (is_int8) {
         TTSIM_VERIFY(src_a_fmt == 14, UnsupportedFunctionality, "int8 src_a_fmt=%d src_b_fmt=%d", src_a_fmt, src_b_fmt);
@@ -1574,12 +1586,13 @@ static bool tensix_elw_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst, ui
             UnimplementedFunctionality, "bf16 src_a_fmt=%d src_b_fmt=%d", src_a_fmt, src_b_fmt); // fp32, tf32, bf16, bfp8, bfp4, int16
     }
     bool use_dst32b = is_int8 || p_config->ALU_ACC_CTRL_Fp32_enabled;
+    bool flush_denormals = !p_config->ALU_ACC_CTRL_Zero_Flag_disabled_src;
     bool fp_exponent_8b = (src_a_fmt != 1);
 
     uint32_t src_a_row = p_tensix->src_a_rwc[pipe];
     uint32_t src_b_row = p_tensix->src_b_rwc[pipe];
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dst + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
-    // XXX no DEST_REGW_BASE_Base
+    // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     TTSIM_VERIFY(!(src_a_row & 7) && (src_a_row < SRC_ROWS), UnsupportedFunctionality, "src_a_row=%d", src_a_row);
     TTSIM_VERIFY(!(src_b_row & 7) && (src_b_row < SRC_ROWS), UnsupportedFunctionality, "src_b_row=%d", src_b_row);
     TTSIM_VERIFY(!(dst_row & 7) && (dst_row < DST_ROWS), UnsupportedFunctionality, "dst_row=%d", dst_row);
@@ -1622,7 +1635,7 @@ static bool tensix_elw_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst, ui
             value_a >>= 13;
             value_b >>= 13;
             bool zero_a = ((value_a & 0x3FFFF) < 0x400);
-            bool zero_b = ((value_b & 0x3FFFF) < 0x400);
+            bool zero_b = flush_denormals && ((value_b & 0x3FFFF) < 0x400);
             uint32_t dst = 0;
             if (elw_op::is_mul() || dest_accum_en) { // ELWMUL forces accumulation, independent of dest_accum_en
                 if (use_dst32b) {
@@ -1681,16 +1694,18 @@ TENSIX_EXECUTE_GMPOOL() {
 
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
-    // XXX no FP16A_FORCE_Enable
+    // Note: FP16A_FORCE_Enable (thread_cfg56/55) is not instantiated and errors on write; always 0
     TTSIM_VERIFY(!p_config->ALU_ACC_CTRL_INT8_math_enabled, UnsupportedFunctionality, "ALU_ACC_CTRL_INT8_math_enabled");
     TTSIM_VERIFY(!p_config->ALU_FORMAT_SPEC_REG_SrcA_override, UnsupportedFunctionality, "ALU_FORMAT_SPEC_REG_SrcA_override");
     uint32_t src_a_fmt = p_config->ALU_FORMAT_SPEC_REG0_SrcA;
     uint32_t src_b_fmt = p_config->ALU_FORMAT_SPEC_REG1_SrcB;
 #if TT_ARCH_VERSION >= 1
-    TTSIM_VERIFY(!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCA_FMT_Base, UnimplementedFunctionality, "DISABLE_IMPLIED_SRCA_FMT_Base");
-    TTSIM_VERIFY(!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCB_FMT_Base, UnimplementedFunctionality, "DISABLE_IMPLIED_SRCB_FMT_Base");
-    src_a_fmt = p_tensix->src_a_format[src_a_bank];
-    src_b_fmt = p_tensix->src_b_format[src_b_bank];
+    if (!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCA_FMT_Base) {
+        src_a_fmt = p_tensix->src_a_format[src_a_bank];
+    }
+    if (!p_tensix->thread[pipe].DISABLE_IMPLIED_SRCB_FMT_Base) {
+        src_b_fmt = p_tensix->src_b_format[src_b_bank];
+    }
 #endif
     TTSIM_VERIFY((src_a_fmt == 0) || (src_a_fmt == 4) || (src_a_fmt == 5) || (src_a_fmt == 6) || (src_a_fmt == 7),
         UnsupportedFunctionality, "src_a_fmt=%d src_b_fmt=%d", src_a_fmt, src_b_fmt); // fp32, tf32, bf16, bfp8, bfp4
@@ -1701,7 +1716,7 @@ TENSIX_EXECUTE_GMPOOL() {
     uint32_t src_a_row = p_tensix->src_a_rwc[pipe];
     uint32_t src_b_row = p_tensix->src_b_rwc[pipe];
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dst + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
-    // XXX no DEST_REGW_BASE_Base
+    // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     TTSIM_VERIFY(!(src_a_row & 15) && (src_a_row < SRC_ROWS), UnsupportedFunctionality, "src_a_row=%d", src_a_row);
     TTSIM_VERIFY(!(src_b_row & 7) && (src_b_row < SRC_ROWS), UnsupportedFunctionality, "src_b_row=%d", src_b_row);
     TTSIM_VERIFY(!(dst_row & 3) && (dst_row < DST_ROWS), UnsupportedFunctionality, "dst_row=%d", dst_row);
@@ -1713,7 +1728,7 @@ TENSIX_EXECUTE_GMPOOL() {
     for (uint32_t j = 0; j < 16; j++) {
         uint32_t max;
         if (use_dst32b) {
-            max = dst_decode_fp32(read_dst32b<true>(p_tensix, dst_row, j));
+            max = dst_decode_fp32(read_dst32b<true>(p_tensix, dst_row, j)) & 0xFFFFE000; // truncate to TF32
         } else {
             max = uint32_t(dst_decode_bf16(read_dst16b<true>(p_tensix, dst_row, j))) << 16;
         }
@@ -1721,6 +1736,9 @@ TENSIX_EXECUTE_GMPOOL() {
             uint32_t src_a_val = p_tensix->src_a[src_a_bank][src_a_row + i][j];
             if (src_a_fmt != 4) {
                 src_a_val &= 0xFFFF0000;
+            }
+            if (!(src_a_val & 0x7F800000)) {
+                src_a_val = 0;
             }
             if (sign_mag32_total_order(src_a_val) > sign_mag32_total_order(max)) {
                 max = src_a_val;
@@ -2544,6 +2562,12 @@ TENSIX_EXECUTE_UNPACR() {
     } else {
         TTSIM_VERIFY(in_data_format == out_data_format, UndefinedBehavior, "in_data_format=%d mismatches out_data_format=%d", in_data_format, out_data_format);
     }
+#if TT_ARCH_VERSION == 1
+    bool exponent_4b = unpack_block_selection ? p_config->THCON_SEC1_REG1_Unp_LF8_4b_exp
+                                              : p_config->THCON_SEC0_REG1_Unp_LF8_4b_exp;
+#else
+    bool exponent_4b = false;
+#endif
     uint32_t tile_x_dim = bits<31,16>(tile_desc0);
     if (ovrd_thread_id && !unpack_block_selection) { // x_dim obtained from different registers for unpack0 in this mode
         tile_x_dim = unpack_context ? p_config->THCON_SEC0_REG5_Tile_x_dim_cntx1
@@ -2782,6 +2806,23 @@ TENSIX_EXECUTE_UNPACR() {
             } else if (in_data_format == 9) {
                 TTSIM_VERIFY(!unpack_to_dst, UnimplementedFunctionality, "unpack_to_dst=%d in_data_format=%d", unpack_to_dst, in_data_format);
                 value = uint32_t(dst_decode_bf16(value)) << 16;
+            } else if (in_data_format == 10) {
+                TTSIM_VERIFY(!unpack_to_dst, UnimplementedFunctionality, "unpack_to_dst=%d in_data_format=%d", unpack_to_dst, in_data_format);
+                if (exponent_4b) { // S1E4M3
+                    uint32_t s = value & 0x80;
+                    uint32_t e = (value >> 3) & 15;
+                    uint32_t m = value & 7;
+                    uint32_t m_pad = ((e == 15) && (m == 7)) ? 0x7F : 0;
+                    e = e ? (e + 8) : 0;
+                    value = (s << 8) | (e << 10) | (m << 7) | m_pad;
+#if TT_ARCH_VERSION == 1
+                } else if ((value & 0x7F) == 0x7F) {
+                    value = (value << 8) | 0xFF; // BH-specific special case for exponent and mantissa all 1s
+#endif
+                } else { // S1E5M2
+                    value <<= 8;
+                }
+                value = ((value & 0x8000) << 16) | ((value & 0x7FFF) << 13);
             } else if (in_data_format == 14) {
                 TTSIM_VERIFY(!unpack_to_dst, UnimplementedFunctionality, "unpack_to_dst=%d in_data_format=%d", unpack_to_dst, in_data_format);
                 bool is_unsigned = unpack_block_selection ? p_config->ALU_FORMAT_SPEC_REG0_SrcBUnsigned
@@ -2838,7 +2879,7 @@ TENSIX_EXECUTE_UNPACR() {
             TTSIM_VERIFY(!(p_tensix->src_b_valid & (1 << src_bank)), NonContractualBehavior, "SrcB bank is already valid");
             p_tensix->src_b_valid |= 1 << src_bank;
             p_tensix->src_b_unpack_bank ^= 1;
-            // XXX no SRCB_SET_Base
+            // Note: SRCB_SET_Base (thread_cfg4/6) is not instantiated and errors on write; always 0
         } else {
             TTSIM_VERIFY(!(p_tensix->src_a_valid & (1 << src_bank)), NonContractualBehavior, "SrcA bank is already valid");
             p_tensix->src_a_valid |= 1 << src_bank;
@@ -2907,7 +2948,7 @@ TENSIX_EXECUTE_UNPACR_NOP() {
             TTSIM_VERIFY(!(p_tensix->src_b_valid & (1 << unpack_bank)), NonContractualBehavior, "SrcB bank is already valid");
             p_tensix->src_b_valid |= 1 << unpack_bank;
             p_tensix->src_b_unpack_bank ^= 1;
-            // XXX no SRCB_SET_Base
+            // Note: SRCB_SET_Base (thread_cfg4/6) is not instantiated and errors on write; always 0
         } else {
             TTSIM_VERIFY(!(p_tensix->src_a_valid & (1 << unpack_bank)), NonContractualBehavior, "SrcA bank is already valid");
             p_tensix->src_a_valid |= 1 << unpack_bank;
@@ -3131,7 +3172,7 @@ TENSIX_EXECUTE_SETDVALID() {
         TTSIM_VERIFY(!(p_tensix->src_b_valid & (1 << unpack_bank)), NonContractualBehavior, "SrcB bank is already valid");
         p_tensix->src_b_valid |= 1 << unpack_bank;
         p_tensix->src_b_unpack_bank = unpack_bank ^ 1;
-        // XXX no SRCB_SET_Base
+        // Note: SRCB_SET_Base (thread_cfg4/6) is not instantiated and errors on write; always 0
     }
     return true;
 #else
@@ -3226,7 +3267,7 @@ TENSIX_EXECUTE_SFPLOAD() {
     }
 
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
-    // XXX no DEST_REGW_BASE_Base
+    // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     dst_row &= DST_ROWS-1;
     TTSIM_VERIFY(!(dst_row & 1), UnsupportedFunctionality, "dst_row=%d", dst_row);
 
@@ -3358,7 +3399,7 @@ TENSIX_EXECUTE_SFPSTORE() {
     }
 
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
-    // XXX no DEST_REGW_BASE_Base
+    // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     TTSIM_VERIFY(!(dst_row & 1) && (dst_row < DST_ROWS), UnsupportedFunctionality, "dst_row=%d", dst_row);
 
     uint32_t mask = p_tensix->cc_en ? p_tensix->cc : 0xFFFFFFFF;
@@ -3395,7 +3436,6 @@ TENSIX_EXECUTE_SFPSTORE() {
             TTSIM_ERROR(AssertionFailure, "instr_mod0=%d", instr_mod0);
         }
     });
-
     math_update_counters(p_tensix, pipe, sfpu_addr_mode, false);
     return true;
 }
@@ -4555,6 +4595,7 @@ TENSIX_EXECUTE_SETC16() {
         THREAD_CFG_REG_WR(2)
         THREAD_CFG_REG_WR(3)
         THREAD_CFG_REG_WR(5)
+        case 6: TTSIM_ERROR(UnsupportedFunctionality, "setc16_reg=%d", setc16_reg);
         THREAD_CFG_REG_WR(7)
         THREAD_CFG_REG_WR(12)
         THREAD_CFG_REG_WR(13)
@@ -4585,9 +4626,11 @@ TENSIX_EXECUTE_SETC16() {
         THREAD_CFG_REG_WR(52)
         THREAD_CFG_REG_WR(53)
         THREAD_CFG_REG_WR(54)
+        case 55: TTSIM_ERROR(UnsupportedFunctionality, "setc16_reg=%d", setc16_reg);
 #else
         THREAD_CFG_REG_WR(2)
         THREAD_CFG_REG_WR(3)
+        case 4: TTSIM_ERROR(UnsupportedFunctionality, "setc16_reg=%d", setc16_reg);
         THREAD_CFG_REG_WR(5)
         THREAD_CFG_REG_WR(6)
         THREAD_CFG_REG_WR(7)
@@ -4619,6 +4662,7 @@ TENSIX_EXECUTE_SETC16() {
         THREAD_CFG_REG_WR(53)
         THREAD_CFG_REG_WR(54)
         THREAD_CFG_REG_WR(55)
+        case 56: TTSIM_ERROR(UnsupportedFunctionality, "setc16_reg=%d", setc16_reg);
 #endif
 #undef THREAD_CFG_REG_WR
         default: TTSIM_ERROR(UnimplementedFunctionality, "setc16_reg=%d", setc16_reg);
