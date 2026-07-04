@@ -213,11 +213,13 @@ semihosting across parallel simulations.
 
 ### Platform and binary compatibility
 
-The released binaries are built and tested on the project's CI platform, currently GitHub-hosted
-`ubuntu-22.04` (x86_64) and `ubuntu-22.04-arm` (aarch64). Those are the platforms we stand behind.
+The binaries are built and tested in CI on GitHub-hosted `ubuntu-22.04` and `ubuntu-24.04`, on both
+x86_64 and aarch64. Those are the platforms we stand behind. Release binaries are currently built on
+`ubuntu-22.04`; we expect to move release builds to `ubuntu-24.04` soon (a newer compiler toolchain),
+which is not expected to change which systems the binaries run on.
 
 Linux/riscv64 and macOS/aarch64 are also supported build targets, and in general the library is
-written to be portable and nearly any POSIX platform should work. However, only the two CI platforms
+written to be portable and nearly any POSIX platform should work. However, only the CI platforms
 above have continuous coverage; on everything else, including the other supported build targets,
 occasional breakage is likely simply because nothing is exercising those configurations on every
 change.
@@ -226,7 +228,7 @@ Running the binary on distributions or releases other than the CI platform is be
 stage: we make no guarantee of support for end-of-life distributions, and cross-distribution binary
 compatibility is not something we currently verify. We do not promise a specific minimum C-library
 version, because we do not check one in our own build and release scripts; tying the guarantee to
-the CI platform is what we can actually stand behind today. This may be tightened into a firmer
+the CI platforms is what we can actually stand behind today. This may be tightened into a firmer
 guarantee in the future.
 
 ## Compatibility policy
