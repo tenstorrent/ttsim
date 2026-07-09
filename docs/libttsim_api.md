@@ -215,8 +215,7 @@ semihosting across parallel simulations.
 
 The binaries are built and tested in CI on GitHub-hosted `ubuntu-22.04` and `ubuntu-24.04`, on both
 x86_64 and aarch64. Those are the platforms we stand behind. Release binaries are currently built on
-`ubuntu-22.04`; we expect to move release builds to `ubuntu-24.04` soon (a newer compiler toolchain),
-which is not expected to change which systems the binaries run on.
+`ubuntu-24.04`, but the binaries are expected to run on 22.04 as well.
 
 Linux/riscv64 and macOS/aarch64 are also supported build targets, and in general the library is
 written to be portable and nearly any POSIX platform should work. However, only the CI platforms
