@@ -395,7 +395,7 @@ struct TensixTile {
     uint32_t overlay_stream_remote_dest_buf_size[TENSIX_NUM_NOC_OVERLAY_STREAMS];
     uint32_t overlay_stream_remote_dest_buf_space_available[TENSIX_NUM_NOC_OVERLAY_STREAMS];
     uint32_t dbg_array_rd_en;
-    uint32_t dbg_array_rd_data;
+    uint32_t dbg_array_rd_cmd;
     uint32_t dbg_bus_ctrl;
     uint32_t tensix_creg_rddata;
     uint32_t soft_reset_0;
@@ -583,6 +583,7 @@ struct ChipState {
 extern uint32_t g_current_chip_id;
 extern uint64_t g_clock;
 extern ChipState g_chips[NUM_CHIPS];
+extern bool g_eth_fw_routing;
 
 // XXX transitional
 // Single-chip builds index a constant 0 so the hot paths cannot regress; only

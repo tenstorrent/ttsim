@@ -8,6 +8,7 @@ import os
 
 # Only files that come from external teams/orgs should go in this list
 skip_files = {
+    'data/wh/eth_fw.bin',
     'src/fma.cpp', # copied exactly from external repo
 }
 

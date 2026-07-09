@@ -155,6 +155,11 @@ extern "C" API_EXPORT void libttsim_init() {
         TTSIM_VERIFY(!strcmp(s, "1"), ConfigurationError, "TTSIM_SEMIHOSTING must be set to 1");
         s_ttsim_semihosting = true;
     }
+    if (char *s = getenv("TTSIM_ETH_FW_ROUTING")) {
+        TTSIM_VERIFY(TT_ARCH_VERSION == 0, ConfigurationError, "TTSIM_ETH_FW_ROUTING is only valid for WH");
+        TTSIM_VERIFY(!strcmp(s, "1"), ConfigurationError, "TTSIM_ETH_FW_ROUTING must be set to 1");
+        g_eth_fw_routing = true;
+    }
     ttsim_init();
     for (uint32_t d = 0; d < NUM_MMIO_CHIPS; d++) {
         // Each MMIO device's BARs live in its own host-physical window (see PER_DEVICE_PADDR_STRIDE).

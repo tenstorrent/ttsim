@@ -3,13 +3,17 @@
 
 # make.py build rules for src/: codegen, compile, and link the simulator per chip and config.
 CHIPS = [
+    (0, 'wh'),
+    (1, 'bh'),
+]
+CONFIGS = [
     # (tt_arch_version, chip, data_chip, num_chips, num_mmio_chips)
-    (0, 'wh',    'wh',  1, 1),
-    (0, 'wh_x2', 'wh',  2, 1),
-    (0, 'wh_x8', 'wh',  8, 4), # T3000/LoudBox: 4 n300 cards (4 MMIO + 4 eth-tunneled), 4x2 mesh
+    (0, 'wh',     'wh',  1,  1),
+    (0, 'wh_x2',  'wh',  2,  1),
+    (0, 'wh_x8',  'wh',  8,  4), # T3000/LoudBox: 4 n300 cards (4 MMIO + 4 eth-tunneled), 4x2 mesh
     (0, 'wh_x32', 'wh', 32, 32), # WH Galaxy (6U): 32 WH chips, 8x4 mesh, all MMIO (BDF)
-    (1, 'bh',    'bh',  1, 1),
-    (1, 'bh_x2', 'bh',  2, 2),
+    (1, 'bh',     'bh',  1,  1),
+    (1, 'bh_x2',  'bh',  2,  2),
     (1, 'bh_x32', 'bh', 32, 32), # BH Galaxy (6U): 32 BH chips, 8x4 mesh, all MMIO (BDF)
 ]
 
@@ -37,27 +41,37 @@ def rules(ctx):
     ctx.rule(target, script, cmd=['python3', script])
     gen_h_files = [target]
 
-    build_targets = []
-    for (tt_arch_version, chip, data_chip, num_chips, num_mmio_chips) in CHIPS:
-        if chip == 'bh_x32' and ctx.host.arch != 'x86_64':
-            continue # -mcmodel=medium is x86_64 only; bh_x32 BSS of ~6.9GB is too large for aarch64
+    chip_gen_h_files = {}
+    for (tt_arch_version, chip) in CHIPS:
         target = f'_out/{chip}/tensix_decode.h'
         script = 'tensix_gen_decode.py'
-        dep = f'../data/{data_chip}/tensix_isa.json'
-        ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', data_chip, '--out', target])
-        chip_gen_h_files = gen_h_files + [target]
+        dep = f'../data/{chip}/tensix_isa.json'
+        ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', chip, '--out', target])
+        chip_gen_h_files[chip] = gen_h_files + [target]
+
+        if tt_arch_version == 0:
+            target = f'_out/{chip}/eth_fw_blob.h'
+            script = 'gen_fw_blob.py'
+            dep = f'../data/{chip}/eth_fw.bin'
+            ctx.rule(target, [script, dep], cmd=['python3', script, '--bin', dep, '--out', target])
+            chip_gen_h_files[chip] += [target]
 
         target = f'_out/{chip}/tensix_regs.h'
         script = 'tensix_gen_regs.py'
-        dep = f'../data/{data_chip}/tensix_regs.json'
-        ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', data_chip, '--out', target])
-        chip_gen_h_files += [target]
+        dep = f'../data/{chip}/tensix_regs.json'
+        ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', chip, '--out', target])
+        chip_gen_h_files[chip] += [target]
 
         target = f'_out/{chip}/tile_regs.h'
         script = 'tile_gen_regs.py'
-        dep = f'../data/{data_chip}/tile_regs.json'
-        ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', data_chip, '--out', target])
-        chip_gen_h_files += [target]
+        dep = f'../data/{chip}/tile_regs.json'
+        ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', chip, '--out', target])
+        chip_gen_h_files[chip] += [target]
+
+    build_targets = []
+    for (tt_arch_version, chip, data_chip, num_chips, num_mmio_chips) in CONFIGS:
+        if chip == 'bh_x32' and ctx.host.arch != 'x86_64':
+            continue # -mcmodel=medium is x86_64 only; bh_x32 BSS of ~6.9GB is too large for aarch64
 
         for config in config_compile_opts:
             out_dir = f'_out/{config}_{chip}'
@@ -67,7 +81,7 @@ def rules(ctx):
                 f'-DTT_ARCH_VERSION={tt_arch_version}',
                 f'-DNUM_CHIPS={num_chips}',
                 f'-DNUM_MMIO_CHIPS={num_mmio_chips}',
-                f'-I_out/{chip}',
+                f'-I_out/{data_chip}',
             ]
             if num_chips >= 16 and ctx.host.arch == 'x86_64':
                 gcc_opts += ['-mcmodel=medium'] # required for >2GB BSS in very large (Galaxy) sims
@@ -79,7 +93,7 @@ def rules(ctx):
                 o_file = f'{out_dir}/{file.replace(".cpp", ".o")}'
                 d_file = o_file.replace('.o', '.d')
                 cmd = ['g++', *gcc_opts, '-c', file, '-o', o_file]
-                ctx.rule(o_file, file, cmd=cmd, depfile=d_file, order_only_inputs=chip_gen_h_files)
+                ctx.rule(o_file, file, cmd=cmd, depfile=d_file, order_only_inputs=chip_gen_h_files[data_chip])
                 o_files += [o_file]
 
             target = f'{out_dir}/libttsim.so'

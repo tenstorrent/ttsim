@@ -9,6 +9,7 @@
 uint32_t g_current_chip_id;
 uint64_t g_clock;
 ChipState g_chips[NUM_CHIPS];
+bool g_eth_fw_routing;
 
 uint64_t ttsim_get_clock() {
     return g_clock;
