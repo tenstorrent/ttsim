@@ -13,6 +13,7 @@ static constexpr uint64_t PCIE_HOST_WINDOW_BASE = 0x800000000ull;
 
 static uint64_t translate_pci_dma_addr(uint64_t addr, uint32_t size);
 static std::pair<char, uint32_t> coord_to_tile(uint32_t coord);
+static uint32_t tile_to_coord(char tile_type, uint32_t tile_id);
 
 template<char tile_type>
 static inline auto get_tile(uint32_t tile_id) {
@@ -191,6 +192,9 @@ static bool eth_peer(uint32_t tile_id, uint32_t *p_chip_id, uint32_t *p_tile_id)
 
 #if TT_ARCH_VERSION == 0
 static void wh_x2_eth_link_init(uint32_t tile_id);
+#if NUM_CHIPS > 1
+static void eth_fw_write_route_table(uint32_t tile_id);
+#endif
 #endif
 
 void e_tile_init(uint32_t tile_id) {
@@ -229,6 +233,12 @@ void e_tile_init(uint32_t tile_id) {
     if (run_eth_fw) {
         static_assert(eth_fw_base + sizeof(eth_fw_blob) <= eth_fw_limit + 1);
         memcpy(&p_tile->sram[eth_fw_base], eth_fw_blob, sizeof(eth_fw_blob));
+        p_tile->rv32[0].pc = p_tile->ierisc_reset_pc;
+        ttsim_rv32_set_core_active('E', tile_id, 0, true);
+        p_tile->soft_reset_0 = 0;
+#if NUM_CHIPS > 1
+        eth_fw_write_route_table(tile_id);
+#endif
     }
 #elif TT_ARCH_VERSION == 1
     p_tile->ierisc_reset_pc = 0; // 0 is used as a guard for BH base fw
@@ -287,14 +297,16 @@ void e_tile_init(uint32_t tile_id) {
 #define ARC_SMBUS_TELEMETRY_CSM_OFFSET 0x000
 #define LEGACY_TELEM_FW_BUNDLE_VERSION 49
 #define FLASH_BUNDLE_VERSION 0x12040000 // v18.4
-#if NUM_CHIPS > 1
-#define BOARD_ID_HIGH 0x01000146 // N300 board id
-#define BOARD_ID_LOW 0x118320AE
-#else
+#if NUM_CHIPS == 1
 #define BOARD_ID_HIGH 0x180 // N150 board id
 #define BOARD_ID_LOW 0x1
+#elif NUM_CHIPS == 32
+#define BOARD_ID_HIGH 0x350
+#define BOARD_ID_LOW 0x1
+#else
+#define BOARD_ID_HIGH 0x01000146 // N300 board id
+#define BOARD_ID_LOW 0x118320AE
 #endif
-#define WH_X2_MANGLED_BOARD_ID 0x618320AE
 #elif TT_ARCH_VERSION == 1
 #define FLASH_BUNDLE_VERSION 0x12050000 // v18.5
 #define ARC_MSG_QCB_CSM_OFFSET 0x300
@@ -312,7 +324,15 @@ void e_tile_init(uint32_t tile_id) {
 #endif
 
 #if TT_ARCH_VERSION == 0
+static uint32_t chip_board_serial(uint32_t chip_id) {
+    return BOARD_ID_LOW + ((NUM_CHIPS > NUM_MMIO_CHIPS) ? (chip_id % NUM_MMIO_CHIPS) : 0);
+}
 #if NUM_CHIPS > 1
+static uint32_t wh_mangled_board_id(uint32_t chip_id) {
+    uint64_t full = (uint64_t(BOARD_ID_HIGH) << 32) | chip_board_serial(chip_id);
+    return ((full >> 4) & 0xF0000000) | (full & 0x0FFFFFFF);
+}
+
 static constexpr uint32_t WH_X2_LEGACY_REMOTE_QUEUE_BASE = 0x11080;
 static constexpr uint32_t WH_X2_LEGACY_REMOTE_QUEUE_SIZE = 0x2000;
 
@@ -339,6 +359,34 @@ static uint32_t chip_coord_to_id(uint32_t chip_x, uint32_t chip_y) {
     return chip_y ? NUM_CHIPS : chip_x;
 #endif
 }
+
+#if NUM_CHIPS > 1
+static uint32_t chip_id_to_coord(uint32_t chip_id) {
+    for (uint32_t chip_y = 0; chip_y < 64; chip_y++) {
+        for (uint32_t chip_x = 0; chip_x < 64; chip_x++) {
+            if (chip_coord_to_id(chip_x, chip_y) == chip_id) {
+                return chip_x | (chip_y << 6);
+            }
+        }
+    }
+    return 0xFFFFFFFF;
+}
+
+static constexpr uint32_t ETH_FW_ROUTE_TABLE_ADDR = 0x28500; // must match eth fw
+static void eth_fw_write_route_table(uint32_t tile_id) {
+    uint8_t *sram = &g_e_tiles[tile_id].sram[0];
+    uint32_t n = 0;
+    for (const EthLink &link : ETH_PEER_TABLE) {
+        if (link.src_chip != g_current_chip_id) {
+            continue;
+        }
+        mem_wr<uint32_t>(&sram[ETH_FW_ROUTE_TABLE_ADDR + 4 + 8 * n + 0], chip_id_to_coord(link.dst_chip));
+        mem_wr<uint32_t>(&sram[ETH_FW_ROUTE_TABLE_ADDR + 4 + 8 * n + 4], tile_to_coord('E', link.src_tile));
+        n++;
+    }
+    mem_wr<uint32_t>(&sram[ETH_FW_ROUTE_TABLE_ADDR], n);
+}
+#endif
 
 static void wh_x2_legacy_remote_queue_update(uint32_t tile_id) {
     constexpr uint32_t REQUEST_CMD_QUEUE_BASE = WH_X2_LEGACY_REMOTE_QUEUE_BASE;
@@ -490,12 +538,12 @@ static void wh_x2_eth_link_init(uint32_t tile_id) {
         mem_wr<uint32_t>(&p_tile->sram[0x1104], 1); // ETH_TRAIN_STATUS_ADDR = LINK_TRAIN_SUCCESS
         mem_wr<uint32_t>(&p_tile->sram[0x104C], 0); // ROUTING_FIRMWARE_STATE = enabled
         mem_wr<uint32_t>(&p_tile->sram[0x1C], 1); // ETH_HEARTBEAT_ADDR
-        mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 64], WH_X2_MANGLED_BOARD_ID); // local board id lo
+        mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 64], wh_mangled_board_id(g_current_chip_id)); // local board id lo
         mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 65], g_current_chip_id); // local ASIC id hi
-        mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 72], WH_X2_MANGLED_BOARD_ID); // remote board id lo
+        mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 72], wh_mangled_board_id(remote_chip_id)); // remote board id lo
         mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 73], remote_chip_id); // remote ASIC id hi
         mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 76], remote_eth_id); // remote eth id
-        mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 77], WH_X2_MANGLED_BOARD_ID); // remote board type
+        mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 77], wh_mangled_board_id(remote_chip_id)); // remote board type
         mem_wr<uint32_t>(&p_tile->sram[0x1100 + 4 * 2], (g_current_chip_id & 0xFF) << 16); // NODE_INFO local x[23:16] (y[31:24]=0)
         mem_wr<uint32_t>(&p_tile->sram[0x1100 + 4 * 9], (remote_chip_id & 0x3F) << 16); // NODE_INFO remote x[21:16] (y[27:22]=0)
         mem_wr<uint32_t>(&p_tile->sram[0x1100 + 4 * 10], 0); // NODE_INFO remote rack[7:0] shelf[15:8] (both 0)
@@ -513,7 +561,6 @@ bool wh_x2_legacy_remote_queue_host_wr(uint32_t coord, uint64_t addr, const void
 #endif
 
 void a_tile_init() {
-#if NUM_CHIPS <= 2
 #if TT_ARCH_VERSION == 0
     g_a_tile.reset_unit_scratch[0] = 0xC0DE0001;
 
@@ -532,12 +579,16 @@ void a_tile_init() {
 
     // Not static: the table captures g_current_chip_id (ASIC_ID / ASIC_LOCATION below), so
     // it must be rebuilt for each chip rather than frozen at the first chip's a_tile_init.
+    uint32_t board_id_low = BOARD_ID_LOW;
+#if TT_ARCH_VERSION == 0
+    board_id_low = chip_board_serial(g_current_chip_id); // per-card serial so UMD groups n300 cards correctly
+#endif
     const struct {
         uint16_t tag;
         uint32_t value;
     } telem[] = {
         {1, BOARD_ID_HIGH},
-        {2, BOARD_ID_LOW},
+        {2, board_id_low},
         {3, 1 + g_current_chip_id},     // ASIC_ID
         {4, 0x0},                       // HARVESTING_STATE
         {14, 1000},                     // AICLK (MHz)
@@ -558,7 +609,6 @@ void a_tile_init() {
         mem_wr<uint32_t>(&g_a_tile.csm[(ARC_TELEMETRY_TABLE_CSM_OFFSET + 8) + 4 * i], telem[i].tag | (i << 16));
         mem_wr<uint32_t>(&g_a_tile.csm[ARC_TELEMETRY_VALUES_CSM_OFFSET + 4 * i], telem[i].value);
     }
-#endif
 }
 
 static uint32_t tile_to_coord(char tile_type, uint32_t tile_id) {

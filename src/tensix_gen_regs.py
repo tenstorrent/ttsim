@@ -35,7 +35,7 @@ def main():
                         f.write(f'            uint32_t {name}; \\\n')
                     else:
                         f.write(f'            uint32_t {name} : {size}; \\\n')
-                    bit_pos += size
+                    bit_pos = shift + size
                     mask = ((1 << size) - 1) << shift
                     assert not used_bits & mask, (addr, field)
                     used_bits |= mask
