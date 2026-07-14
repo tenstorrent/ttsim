@@ -703,7 +703,8 @@ TENSIX_EXECUTE_MOVD2A() {
         src_a_fmt = p_tensix->src_a_format[src_a_bank];
     }
 #endif
-    TTSIM_VERIFY((src_a_fmt == 0) || (src_a_fmt == 1) || (src_a_fmt == 4) || (src_a_fmt == 5) || (src_a_fmt == 6), // fp32, fp16, tf32, bf16, bfp8
+    TTSIM_VERIFY((src_a_fmt == 0) || (src_a_fmt == 1) || (src_a_fmt == 4) || (src_a_fmt == 5) || (src_a_fmt == 6) ||
+                 (src_a_fmt == 7), // fp32, fp16, tf32, bf16, bfp8, bfp4
         UnimplementedFunctionality, "src_a_fmt=%d", src_a_fmt);
     bool use_dst32b = p_config->ALU_ACC_CTRL_Fp32_enabled || p_config->ALU_ACC_CTRL_INT8_math_enabled;
 
@@ -1514,7 +1515,7 @@ static bool tensix_matmul_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst,
         for (uint32_t row = 0; row < N_ROWS; row++) {
             for (uint32_t i = 0; i < 16; i++) {
                 uint32_t value = p_tensix->src_b[src_b_bank][src_b_row + row][i];
-                if (src_b_fmt == 1) {
+                if ((src_b_fmt == 1) || (src_b_fmt == 10)) {
                     value &= 0x8FFFE000;
                 } else if (src_b_fmt != 4) {
                     value &= 0xFFFF0000;
@@ -1525,7 +1526,7 @@ static bool tensix_matmul_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst,
         for (uint32_t col = 0; col < ROW_SIZE; col++) {
             for (uint32_t i = 0; i < 16; i++) {
                 uint32_t value = p_tensix->src_a[src_a_bank][src_a_row + i][col];
-                if (src_a_fmt == 1) {
+                if ((src_a_fmt == 1) || (src_a_fmt == 10)) {
                     value &= 0x8FFFE000;
                 } else if (src_a_fmt != 4) {
                     value &= 0xFFFF0000;
@@ -1668,12 +1669,12 @@ static bool tensix_elw_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst, ui
                 write_dst32b<true>(p_tensix, dst_row + row, col, dst_encode_int32(result));
                 continue;
             }
-            if (src_a_fmt == 1) {
+            if ((src_a_fmt == 1) || (src_a_fmt == 10)) {
                 value_a &= 0x8FFFE000;
             } else if (src_a_fmt != 4) {
                 value_a &= 0xFFFF0000;
             }
-            if (src_b_fmt == 1) {
+            if ((src_b_fmt == 1) || (src_b_fmt == 10)) {
                 value_b &= 0x8FFFE000;
             } else if (src_b_fmt != 4) {
                 value_b &= 0xFFFF0000;
@@ -1953,6 +1954,29 @@ static uint16_t pack_l1_acc_bf16(uint16_t dst, uint16_t src) {
     }
 }
 
+static uint16_t pack_l1_acc_fp16(uint16_t dst, uint16_t src) {
+    uint32_t dst32 = uint32_t(dst & 0x8000) << 16;
+    uint32_t src32 = uint32_t(src & 0x8000) << 16;
+    if ((dst & 0x7FFF) >= 0x400) { // any nonzero exponent becomes an FP32 normal (no inf/NaN encodings)
+        dst32 |= (uint32_t(dst & 0x7FFF) << 13) + (112 << 23);
+    }
+    if ((src & 0x7FFF) >= 0x400) { // any nonzero exponent becomes an FP32 normal (no inf/NaN encodings)
+        src32 |= (uint32_t(src & 0x7FFF) << 13) + (112 << 23);
+    }
+    uint32_t result32 = std::bit_cast<uint32_t>(std::bit_cast<float>(dst32) + std::bit_cast<float>(src32));
+    uint16_t sign = (result32 >> 16) & 0x8000;
+    if (!(result32 & 0x7FFFFFFF)) { // exact cancellation: |dst| == |src|
+        return sign | ((((dst >> 10) & 31) >= 30) ? 0x7FFF : 0); // some cancellation cases produce overflow (!)
+    }
+    int32_t e = ((result32 >> 23) & 0xFF) - 112;
+    if (e <= 0) {
+        return sign | ((e < 0) ? 0x7FFF : 0); // underflow saturates; a zero exponent field is signed zero
+    }
+    uint32_t m = result32 & 0x7FFFFF;
+    uint32_t packed = (e << 10) + ((m + (1u << (22 - 10)) - 1 + ((m >> (23 - 10)) & 1)) >> (23 - 10)); // RTNE
+    return sign | ((packed < 0x8000) ? packed : 0x7FFF); // saturate on overflow
+}
+
 TENSIX_EXECUTE_PACR() {
 #if TT_ARCH_VERSION == 1
     TTSIM_VERIFY(!flush, MissingSpecification, "flush=%d", flush);
@@ -2087,6 +2111,7 @@ TENSIX_EXECUTE_PACR() {
         "intermediate_format=%d mismatches late_from_format=%d", intermediate_format, pack_src_format);
     uint32_t pack_fmt_conv_mode = (p_config->PCK_DEST_RD_CTRL_Read_32b_data << 8) | (pack_src_format << 4) | pack_dst_format;
     TTSIM_VERIFY((pack_fmt_conv_mode == 0x10) || (pack_fmt_conv_mode == 0x11) || (pack_fmt_conv_mode == 0x15) || // fp16 src, fp32/fp16/bf16 dst
+                 ((pack_fmt_conv_mode == 0x1A) && (TT_ARCH_VERSION == 1)) || // bh only fp16 src, fp8 dst
                  (pack_fmt_conv_mode == 0x26) || // bfp8a src, bfp8 dst
                  (pack_fmt_conv_mode == 0x50) || (pack_fmt_conv_mode == 0x55) || // bf16 src, fp32/bf16 dst
                  (pack_fmt_conv_mode == 0x56) || (pack_fmt_conv_mode == 0x57) || (pack_fmt_conv_mode == 0x5F) || // bf16 src, bfp8/bfp4/bfp2 dst
@@ -2103,7 +2128,7 @@ TENSIX_EXECUTE_PACR() {
     if ((pack_fmt_conv_mode == 0x111) || (pack_fmt_conv_mode == 0x11A)) {
         TTSIM_VERIFY(p_config->PCK_DEST_RD_CTRL_Round_10b_mant, UnsupportedFunctionality,
             "pack_fmt_conv_mode=0x%x round_10b_mant=%d", pack_fmt_conv_mode, p_config->PCK_DEST_RD_CTRL_Round_10b_mant);
-    } else {
+    } else if (pack_fmt_conv_mode != 0x1A) {
         TTSIM_VERIFY(!p_config->PCK_DEST_RD_CTRL_Round_10b_mant, UnimplementedFunctionality,
             "pack_fmt_conv_mode=0x%x round_10b_mant=%d", pack_fmt_conv_mode, p_config->PCK_DEST_RD_CTRL_Round_10b_mant);
     }
@@ -2144,7 +2169,8 @@ TENSIX_EXECUTE_PACR() {
 #endif
     bool pack_l1_acc = p_config->THCON_SEC0_REG1_Pack_L1_Acc;
     if (pack_l1_acc) {
-        TTSIM_VERIFY((pack_dst_format == 0) || (pack_dst_format == 5), UnsupportedFunctionality, "pack_l1_acc: pack_dst_format=%d", pack_dst_format); // fp32, bf16
+        TTSIM_VERIFY((pack_dst_format == 0) || (pack_dst_format == 1) || (pack_dst_format == 5),
+            UnsupportedFunctionality, "pack_l1_acc: pack_dst_format=%d", pack_dst_format); // fp32, fp16, bf16
     }
 #if TT_ARCH_VERSION == 0
     TTSIM_VERIFY(pack_l1_acc == p_config->THCON_SEC0_REG8_Pack_L1_Acc, UnsupportedFunctionality, "Pack_L1_Acc inconsistent");
@@ -2304,6 +2330,20 @@ TENSIX_EXECUTE_PACR() {
                     }
                 } else {
                     value = read_dst16b(p_tensix, row, col);
+#if TT_ARCH_VERSION == 1
+                    if ((intermediate_format == 1) && p_config->PCK_DEST_RD_CTRL_Round_10b_mant) {
+                        value = dst_decode_bf16(value);
+                        int32_t e = ((value >> 7) & 255) - 112;
+                        uint32_t m = value & 0x7F;
+                        if (e < 0) {
+                            value = (value & 0x8000);
+                        } else if (e > 31) {
+                            value = (value & 0x8000) | 0x7FFF;
+                        } else {
+                            value = (value & 0x8000) | (e << 10) | (m << 3);
+                        }
+                    } else
+#endif
                     if ((intermediate_format == 1) || (intermediate_format == 2)) {
                         value = dst_decode_fp16(value);
                         TTSIM_VERIFY(!read_raw, UnimplementedFunctionality, "fp16 to fp16: read_raw=%d", read_raw);
@@ -2331,41 +2371,59 @@ TENSIX_EXECUTE_PACR() {
                         TTSIM_ERROR(UnimplementedFunctionality, "dst16b intermediate_format=%d", intermediate_format);
                     }
                 }
-                if (p_config->STACC_RELU_ApplyRelu) {
-                    TTSIM_VERIFY(p_config->STACC_RELU_ApplyRelu <= 3,
-                        UnsupportedFunctionality, "apply_relu=%d", p_config->STACC_RELU_ApplyRelu);
+                if (uint32_t apply_relu = p_config->STACC_RELU_ApplyRelu) {
+                    TTSIM_VERIFY(apply_relu <= 3, UnsupportedFunctionality, "apply_relu=%d", apply_relu);
                     TTSIM_VERIFY(!(p_config->STACC_RELU_ReluThreshold & 0x8000), UndefinedBehavior,
                         "negative relu_threshold=0x%x", p_config->STACC_RELU_ReluThreshold);
-                    TTSIM_VERIFY((intermediate_format == 5) || (intermediate_format == 6) ||
-                                 ((intermediate_format == 1) && !p_config->PCK_DEST_RD_CTRL_Read_32b_data) ||
-                                 (intermediate_format == 0),
-                        UnimplementedFunctionality, "relu intermediate_format=%d read_32b_data=%d",
-                        intermediate_format, p_config->PCK_DEST_RD_CTRL_Read_32b_data);
-                    if ((intermediate_format == 1) || (intermediate_format == 5) || (intermediate_format == 6)) {
+                    TTSIM_VERIFY((intermediate_format == 0) || (intermediate_format == 1) || (intermediate_format == 2) ||
+                                 (intermediate_format == 5) || (intermediate_format == 6) || (intermediate_format == 8),
+                        UnimplementedFunctionality, "relu intermediate_format=%d",
+                        intermediate_format);
+#if TT_ARCH_VERSION == 1
+                    if ((intermediate_format == 1) && p_config->PCK_DEST_RD_CTRL_Read_32b_data) {
+                        uint32_t threshold = p_config->STACC_RELU_ReluThreshold << 3;
+                        if (value & 0x40000) {
+                            value = 0;
+                        }
+                        if ((apply_relu == 2) && (value <= threshold)) {
+                            value = 0;
+                        }
+                        if ((apply_relu == 3) && (value > threshold)) {
+                            value = threshold;
+                        }
+                    } else
+#endif
+                    if ((intermediate_format == 1) || (intermediate_format == 2) || (intermediate_format == 5) || (intermediate_format == 6)) {
                         if (value & 0x8000) {
                             value = 0;
                         }
-                        if ((p_config->STACC_RELU_ApplyRelu == 2) && (value <= p_config->STACC_RELU_ReluThreshold)) {
+                        if ((apply_relu == 2) && (value <= p_config->STACC_RELU_ReluThreshold)) {
                             value = 0;
                         }
-                        if ((p_config->STACC_RELU_ApplyRelu == 3) && (value > p_config->STACC_RELU_ReluThreshold)) {
+                        if ((apply_relu == 3) && (value > p_config->STACC_RELU_ReluThreshold)) {
                             value = p_config->STACC_RELU_ReluThreshold;
+                        }
+                    } else if (intermediate_format == 8) {
+                        TTSIM_VERIFY(apply_relu == 1, UnimplementedFunctionality,
+                            "int32 relu apply_relu=%d", apply_relu);
+                        if (value & 0x80000000) {
+                            value = 0;
                         }
                     } else { // intermediate_format=0
                         uint32_t threshold = p_config->STACC_RELU_ReluThreshold << 16;
                         if (value & 0x80000000) {
                             value = 0;
                         }
-                        if ((p_config->STACC_RELU_ApplyRelu == 2) && (value <= threshold)) {
+                        if ((apply_relu == 2) && (value <= threshold)) {
                             value = 0;
                         }
-                        if ((p_config->STACC_RELU_ApplyRelu == 3) && ((value >> 13) > (threshold >> 13))) {
+                        if ((apply_relu == 3) && ((value >> 13) > (threshold >> 13))) {
                             value = threshold;
                         }
                     }
                 }
 #if TT_ARCH_VERSION == 1
-                if ((p_config->PCK_DEST_RD_CTRL_Read_32b_data == 1) && (intermediate_format == 1)) {
+                if ((intermediate_format == 1) && p_config->PCK_DEST_RD_CTRL_Read_32b_data) {
                     uint32_t s = value >> 18;
                     int32_t e = int32_t((value >> 10) & 255) - 112;
                     uint32_t m = value & 0x3FF;
@@ -2438,7 +2496,11 @@ TENSIX_EXECUTE_PACR() {
                 mem_wr<uint32_t>(&g_t_tiles[p_tensix->tile_id].sram[sram_addr], value);
             } else if (dst_element_size_bits == 16) {
                 if (pack_l1_acc) {
-                    value = pack_l1_acc_bf16(mem_rd<uint16_t>(&g_t_tiles[p_tensix->tile_id].sram[sram_addr]), value);
+                    if (pack_dst_format == 5) {
+                        value = pack_l1_acc_bf16(mem_rd<uint16_t>(&g_t_tiles[p_tensix->tile_id].sram[sram_addr]), value);
+                    } else {
+                        value = pack_l1_acc_fp16(mem_rd<uint16_t>(&g_t_tiles[p_tensix->tile_id].sram[sram_addr]), value);
+                    }
                 }
                 mem_wr<uint16_t>(&g_t_tiles[p_tensix->tile_id].sram[sram_addr], value);
             } else if (!is_bfp_format(pack_dst_format)) {
@@ -3486,7 +3548,8 @@ TENSIX_EXECUTE_SFPSTORE() {
 
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
     // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
-    TTSIM_VERIFY(!(dst_row & 1) && (dst_row < DST_ROWS), UnsupportedFunctionality, "dst_row=%d", dst_row);
+    dst_row &= DST_ROWS-1;
+    TTSIM_VERIFY(!(dst_row & 1), UnsupportedFunctionality, "dst_row=%d", dst_row);
 
     uint32_t mask = p_tensix->cc_en ? p_tensix->cc : 0xFFFFFFFF;
     for_each_lane(mask, [=](uint32_t lane) {

@@ -502,6 +502,9 @@ static void service_request_queue(uint32_t *send_seq) {
 // while metal's app holds the core. State lives in L1 so it survives across those two call sites.
 // Non-static: referenced by the crt0 yield shim.
 void eth_service(void) {
+    if (route_my_peer() == 0xFFFFFFFF) {
+        return;
+    }
     uint32_t send_seq = PHYS_RD32(SEND_SEQ_ADDR);
     service_request_queue(&send_seq); // ingress: my host queue (single-hop, or relay to a sibling egress)
     uint32_t last_recv_seq = PHYS_RD32(LAST_RECV_SEQ_ADDR);

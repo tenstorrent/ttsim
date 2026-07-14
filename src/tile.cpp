@@ -212,10 +212,7 @@ void e_tile_init(uint32_t tile_id) {
 #if TT_ARCH_VERSION == 0
     constexpr uint32_t eth_fw_base = 0x38000;
     constexpr uint32_t eth_fw_limit = 0x3BFFF;
-    // Run the compiled base routing fw only on ACTIVE eth cores (those with an inter-chip peer).
-    uint32_t eth_peer_chip, eth_peer_tile;
-    bool run_eth_fw = g_eth_fw_routing && eth_peer(tile_id, &eth_peer_chip, &eth_peer_tile);
-    p_tile->ierisc_reset_pc = run_eth_fw ? eth_fw_base : 0;
+    p_tile->ierisc_reset_pc = g_eth_fw_routing ? eth_fw_base : 0;
     mem_wr<uint32_t>(&p_tile->sram[0x210], (6 << 16) | (14 << 12)); // ETH_FW_VERSION_ADDR = 6.14.0
     mem_wr<uint32_t>(&p_tile->sram[0x1104], 3); // ETH_TRAIN_STATUS_ADDR = NOT_CONNECTED
     constexpr uint32_t jmp_addr = 0x440; // This is the address jumped to by the context switch
@@ -229,17 +226,11 @@ void e_tile_init(uint32_t tile_id) {
     }
     p_tile->eth_txq_dest_mac_addr_lo[0] = 0xAB;
     p_tile->eth_txq_dest_mac_addr_lo[1] = 0xAA;
-    wh_x2_eth_link_init(tile_id);
-    if (run_eth_fw) {
+    if (g_eth_fw_routing) {
         static_assert(eth_fw_base + sizeof(eth_fw_blob) <= eth_fw_limit + 1);
         memcpy(&p_tile->sram[eth_fw_base], eth_fw_blob, sizeof(eth_fw_blob));
-        p_tile->rv32[0].pc = p_tile->ierisc_reset_pc;
-        ttsim_rv32_set_core_active('E', tile_id, 0, true);
-        p_tile->soft_reset_0 = 0;
-#if NUM_CHIPS > 1
-        eth_fw_write_route_table(tile_id);
-#endif
     }
+    wh_x2_eth_link_init(tile_id);
 #elif TT_ARCH_VERSION == 1
     p_tile->ierisc_reset_pc = 0; // 0 is used as a guard for BH base fw
     uint32_t jmp_addr = 0x71574;
@@ -369,7 +360,7 @@ static uint32_t chip_id_to_coord(uint32_t chip_id) {
             }
         }
     }
-    return 0xFFFFFFFF;
+    TTSIM_ERROR(AssertionFailure, "chip id has no matching coord %d", chip_id);
 }
 
 static constexpr uint32_t ETH_FW_ROUTE_TABLE_ADDR = 0x28500; // must match eth fw
@@ -534,7 +525,15 @@ static void wh_x2_eth_link_init(uint32_t tile_id) {
     EthTile *p_tile = &g_e_tiles[tile_id];
     uint32_t remote_chip_id = 0;
     uint32_t remote_eth_id = 0;
+    if (g_eth_fw_routing) {
+        eth_fw_write_route_table(tile_id);
+    }
     if (eth_peer(tile_id, &remote_chip_id, &remote_eth_id)) {
+        if (g_eth_fw_routing) {
+            p_tile->rv32[0].pc = p_tile->ierisc_reset_pc;
+            ttsim_rv32_set_core_active('E', tile_id, 0, true);
+            p_tile->soft_reset_0 = 0;
+        }
         mem_wr<uint32_t>(&p_tile->sram[0x1104], 1); // ETH_TRAIN_STATUS_ADDR = LINK_TRAIN_SUCCESS
         mem_wr<uint32_t>(&p_tile->sram[0x104C], 0); // ROUTING_FIRMWARE_STATE = enabled
         mem_wr<uint32_t>(&p_tile->sram[0x1C], 1); // ETH_HEARTBEAT_ADDR
@@ -544,8 +543,12 @@ static void wh_x2_eth_link_init(uint32_t tile_id) {
         mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 73], remote_chip_id); // remote ASIC id hi
         mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 76], remote_eth_id); // remote eth id
         mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 77], wh_mangled_board_id(remote_chip_id)); // remote board type
-        mem_wr<uint32_t>(&p_tile->sram[0x1100 + 4 * 2], (g_current_chip_id & 0xFF) << 16); // NODE_INFO local x[23:16] (y[31:24]=0)
-        mem_wr<uint32_t>(&p_tile->sram[0x1100 + 4 * 9], (remote_chip_id & 0x3F) << 16); // NODE_INFO remote x[21:16] (y[27:22]=0)
+        uint32_t local_coord = chip_id_to_coord(g_current_chip_id);
+        uint32_t remote_coord = chip_id_to_coord(remote_chip_id);
+        mem_wr<uint32_t>(&p_tile->sram[0x1100 + 4 * 2],
+            ((local_coord & 0x3F) << 16) | (((local_coord >> 6) & 0x3F) << 24)); // NODE_INFO local x[23:16] y[31:24]
+        mem_wr<uint32_t>(&p_tile->sram[0x1100 + 4 * 9],
+            ((remote_coord & 0x3F) << 16) | (((remote_coord >> 6) & 0x3F) << 22)); // NODE_INFO remote x[21:16] y[27:22]
         mem_wr<uint32_t>(&p_tile->sram[0x1100 + 4 * 10], 0); // NODE_INFO remote rack[7:0] shelf[15:8] (both 0)
     }
 #endif
