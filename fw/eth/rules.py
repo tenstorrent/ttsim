@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# The fw's reserved eth-L1 region. Must match the 'eth_fw' region in tile.cpp
-ETH_FW_LOAD_ADDR = 0x38000
-ETH_FW_STACK_TOP = 0x3C000
+# The fw's reserved eth-L1 region: code, scratch, and stack all live in tt-metal's ROUTING_FW_RESERVED
+# window (0x11000-0x18000), above UMD's tunnel queues/buffer. Must match the 'eth_fw' region in tile.cpp.
+ETH_FW_LOAD_ADDR = 0x13000
+ETH_FW_STACK_TOP = 0x18000
 
 # The absolute-address MMIO writes in the fw trip -Warray-bounds, so suppress it.
 CC_OPTS = [

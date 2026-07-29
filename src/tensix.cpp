@@ -603,20 +603,22 @@ static inline uint32_t dst32b_adjust_row(uint32_t row) {
     return ((row & 0x1F8) << 1) | (row & 0x207);
 }
 
+static constexpr uint32_t DST32B_LO_ROW_OFFSET = 8;
+
 template<bool is_gmpool = false>
 static inline uint32_t read_dst32b(TensixState *p_tensix, uint32_t row, uint32_t col) {
     uint32_t adj_row = dst32b_adjust_row(row);
     if (!p_tensix->dst_row_valid[adj_row]) {
         return is_gmpool ? 0xFFFFFFFF : 0;
     }
-    return (uint32_t(p_tensix->dst[adj_row][col]) << 16) | p_tensix->dst[adj_row + 8][col];
+    return (uint32_t(p_tensix->dst[adj_row][col]) << 16) | p_tensix->dst[adj_row + DST32B_LO_ROW_OFFSET][col];
 }
 
 template<bool set_valid_on_last_column_only = false>
 static inline void write_dst32b(TensixState *p_tensix, uint32_t row, uint32_t col, uint32_t data) {
     uint32_t adj_row = dst32b_adjust_row(row);
     p_tensix->dst[adj_row][col] = data >> 16;
-    p_tensix->dst[adj_row + 8][col] = data & 0xFFFF;
+    p_tensix->dst[adj_row + DST32B_LO_ROW_OFFSET][col] = data & 0xFFFF;
     if (!set_valid_on_last_column_only || (col == 15)) {
         p_tensix->dst_row_valid[adj_row] = true;
     }
@@ -626,7 +628,8 @@ template<bool is_gmpool = false>
 static inline uint16_t read_dst16b(TensixState *p_tensix, uint32_t row, uint32_t col) {
     if (p_tensix->dst_32bit_addr_en) {
         return read_dst32b<is_gmpool>(p_tensix, row, col) >> 16;
-    } else if (!p_tensix->dst_row_valid[row]) {
+    } else
+    if (!p_tensix->dst_row_valid[row]) {
         return is_gmpool ? 0xFFFF : 0;
     } else {
         return p_tensix->dst[row][col];
@@ -638,7 +641,8 @@ static inline void write_dst16b(TensixState *p_tensix, uint32_t row, uint32_t co
     // XXX docs say this writes "something - generally garbage - to the low 16 bits", what to do?
     if (p_tensix->dst_32bit_addr_en) {
         write_dst32b<set_valid_on_last_column_only>(p_tensix, row, col, uint32_t(data) << 16);
-    } else {
+    } else
+    {
         p_tensix->dst[row][col] = data;
         if (!set_valid_on_last_column_only || (col == 15)) {
             p_tensix->dst_row_valid[row] = true;
@@ -711,8 +715,9 @@ TENSIX_EXECUTE_MOVD2A() {
     uint32_t src_a_row = src + p_tensix->src_a_rwc[pipe];
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dst + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
     // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
+    src_a_row &= SRC_ROWS-1;
     dst_row &= DST_ROWS-1;
-    TTSIM_VERIFY(!(src_a_row & 3) && (src_a_row < SRC_ROWS), UnsupportedFunctionality, "src_a_row=%d", src_a_row);
+    TTSIM_VERIFY(!(src_a_row & 3), UnsupportedFunctionality, "src_a_row=%d", src_a_row);
     TTSIM_VERIFY(!(dst_row & 3), UnimplementedFunctionality, "dst_row=%d", dst_row);
     for (uint32_t row = 0; row < 4; row++) {
         for (uint32_t col = 0; col < ROW_SIZE; col++) {
@@ -3414,8 +3419,9 @@ TENSIX_EXECUTE_SFPLOAD() {
         }
     }
 
-    uint32_t dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
+    uint32_t math_offset = p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
     // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
+    uint32_t dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + math_offset;
     dst_row &= DST_ROWS-1;
     TTSIM_VERIFY(!(dst_row & 1), UnsupportedFunctionality, "dst_row=%d", dst_row);
 
@@ -3437,11 +3443,13 @@ TENSIX_EXECUTE_SFPLOAD() {
         } else if (instr_mod0 == 2) {
             value = dst_decode_bf16(read_dst16b(p_tensix, row, col));
             value <<= 16;
-        } else if ((instr_mod0 == 3) || (instr_mod0 == 4)) {
+        } else
+        if ((instr_mod0 == 3) || (instr_mod0 == 4)) {
             value = dst_decode_fp32(read_dst32b(p_tensix, row, col));
         } else if (instr_mod0 == 6) {
             value = read_dst16b(p_tensix, row, col);
-        } else if (instr_mod0 == 12) {
+        } else
+        if (instr_mod0 == 12) {
             value = dst_decode_fp32(read_dst32b(p_tensix, row, col));
 #if TT_ARCH_VERSION == 0
             if (value & 0x80000000) {
@@ -3450,7 +3458,8 @@ TENSIX_EXECUTE_SFPLOAD() {
 #endif
         } else if (instr_mod0 == 14) {
             value = (p_tensix->l_regs[lreg_ind][lane] & 0xFFFF0000) | uint32_t(read_dst16b(p_tensix, row, col));
-        } else if (instr_mod0 == 15) {
+        } else
+        if (instr_mod0 == 15) {
             value = (uint32_t(read_dst16b(p_tensix, row, col)) << 16) | (p_tensix->l_regs[lreg_ind][lane] & 0xFFFF);
         } else {
             TTSIM_ERROR(AssertionFailure, "instr_mod0=%d", instr_mod0);
@@ -3546,8 +3555,9 @@ TENSIX_EXECUTE_SFPSTORE() {
         }
     }
 
-    uint32_t dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
+    uint32_t math_offset = p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
     // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
+    uint32_t dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + math_offset;
     dst_row &= DST_ROWS-1;
     TTSIM_VERIFY(!(dst_row & 1), UnsupportedFunctionality, "dst_row=%d", dst_row);
 

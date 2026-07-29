@@ -192,9 +192,8 @@ static bool eth_peer(uint32_t tile_id, uint32_t *p_chip_id, uint32_t *p_tile_id)
 
 #if TT_ARCH_VERSION == 0
 static void wh_x2_eth_link_init(uint32_t tile_id);
-#if NUM_CHIPS > 1
-static void eth_fw_write_route_table(uint32_t tile_id);
-#endif
+#elif TT_ARCH_VERSION == 1
+static void bh_eth_link_init(uint32_t tile_id);
 #endif
 
 void e_tile_init(uint32_t tile_id) {
@@ -209,10 +208,8 @@ void e_tile_init(uint32_t tile_id) {
         p_tile->router_cfg_1[noc] = NONTENSIX_COL_MASK;
         p_tile->router_cfg_3[noc] = NONTENSIX_ROW_MASK;
     }
+    p_tile->ierisc_reset_pc = 0;
 #if TT_ARCH_VERSION == 0
-    constexpr uint32_t eth_fw_base = 0x38000;
-    constexpr uint32_t eth_fw_limit = 0x3BFFF;
-    p_tile->ierisc_reset_pc = g_eth_fw_routing ? eth_fw_base : 0;
     mem_wr<uint32_t>(&p_tile->sram[0x210], (6 << 16) | (14 << 12)); // ETH_FW_VERSION_ADDR = 6.14.0
     mem_wr<uint32_t>(&p_tile->sram[0x1104], 3); // ETH_TRAIN_STATUS_ADDR = NOT_CONNECTED
     constexpr uint32_t jmp_addr = 0x440; // This is the address jumped to by the context switch
@@ -226,13 +223,8 @@ void e_tile_init(uint32_t tile_id) {
     }
     p_tile->eth_txq_dest_mac_addr_lo[0] = 0xAB;
     p_tile->eth_txq_dest_mac_addr_lo[1] = 0xAA;
-    if (g_eth_fw_routing) {
-        static_assert(eth_fw_base + sizeof(eth_fw_blob) <= eth_fw_limit + 1);
-        memcpy(&p_tile->sram[eth_fw_base], eth_fw_blob, sizeof(eth_fw_blob));
-    }
     wh_x2_eth_link_init(tile_id);
 #elif TT_ARCH_VERSION == 1
-    p_tile->ierisc_reset_pc = 0; // 0 is used as a guard for BH base fw
     uint32_t jmp_addr = 0x71574;
     mem_wr<uint32_t>(&p_tile->sram[0x7CF00], jmp_addr); // send_eth_msg function address
     mem_wr<uint32_t>(&p_tile->sram[jmp_addr], riscv_ret_inst); // Make this function a no-op
@@ -259,35 +251,18 @@ void e_tile_init(uint32_t tile_id) {
     p_tile->eth_txq_txpkt_cfg_sel_sw[1] = 0x111;
     p_tile->eth_txq_txpkt_cfg_sel_hw[0] = 0;
     p_tile->eth_txq_txpkt_cfg_sel_hw[1] = 1;
-    // Fake the eth base-FW boot_results that the active-erisc app (and UMD) read to confirm a
-    // link state -- the base FW that writes these after link training is faked out. A tile with
-    // an inter-chip peer advertises a trained, connected link; every other tile reports the link
-    // down. UMD polls port_status until it leaves PORT_UNKNOWN, so an unpeered tile must still
-    // report a terminal PORT_DOWN. Offsets per tt-metal blackhole eth_fw_api.h boot_results_t at
-    // MEM_SYSENG_BOOT_RESULTS_BASE 0x7CC00 (eth_status @ 0, eth_live_status @ 512).
-#if NUM_CHIPS > 1
-    uint32_t bh_remote_chip = 0, bh_remote_eth = 0;
-    if (eth_peer(tile_id, &bh_remote_chip, &bh_remote_eth)) {
-        mem_wr<uint32_t>(&p_tile->sram[0x7CC04], 1); // eth_status.port_status = PORT_UP
-        mem_wr<uint32_t>(&p_tile->sram[0x7CC08], 2); // eth_status.train_status = LINK_TRAIN_PASS
-        mem_wr<uint32_t>(&p_tile->sram[0x7CE04], 1); // eth_live_status.rx_link_up = 1
-    } else
-#endif
-    {
-        mem_wr<uint32_t>(&p_tile->sram[0x7CC04], 2); // eth_status.port_status = PORT_DOWN (no link)
-    }
-    // eth_status.postcode reports how far the base FW's eth_init() got; tt-metal waits for a terminal
-    // value (PASS/FAIL/SKIP) on every idle eth core before resetting it. Init completes -> PASS.
-    mem_wr<uint32_t>(&p_tile->sram[0x7CC00], 0xC0DEA000); // eth_status.postcode = POSTCODE_ETH_INIT_PASS
+    bh_eth_link_init(tile_id);
 #endif
 }
 
 #define ARC_TELEMETRY_TABLE_CSM_OFFSET 0x100
 #define ARC_TELEMETRY_VALUES_CSM_OFFSET 0x200
+#define GDDR_STATUS_TRAINED (0x55555555u >> (32 - 2 * NUM_DRAM_CHANNELS)) // Mark every channel trained.
 #if TT_ARCH_VERSION == 0
 #define ARC_SMBUS_TELEMETRY_CSM_OFFSET 0x000
 #define LEGACY_TELEM_FW_BUNDLE_VERSION 49
 #define FLASH_BUNDLE_VERSION 0x12040000 // v18.4
+#define ETH_LIVE_STATUS_MASK 0xFFFF     // all 16 eth tiles live
 #if NUM_CHIPS == 1
 #define BOARD_ID_HIGH 0x180 // N150 board id
 #define BOARD_ID_LOW 0x1
@@ -300,6 +275,7 @@ void e_tile_init(uint32_t tile_id) {
 #endif
 #elif TT_ARCH_VERSION == 1
 #define FLASH_BUNDLE_VERSION 0x12050000 // v18.5
+#define ETH_LIVE_STATUS_MASK 0x0FFF     // eth tiles 12,13 harvested
 #define ARC_MSG_QCB_CSM_OFFSET 0x300
 #define ARC_MSG_QUEUE_CSM_OFFSET 0x400
 #define ARC_MSG_NUM_QUEUES 4
@@ -363,10 +339,12 @@ static uint32_t chip_id_to_coord(uint32_t chip_id) {
     TTSIM_ERROR(AssertionFailure, "chip id has no matching coord %d", chip_id);
 }
 
-static constexpr uint32_t ETH_FW_ROUTE_TABLE_ADDR = 0x28500; // must match eth fw
-static void eth_fw_write_route_table(uint32_t tile_id) {
+static constexpr uint32_t ETH_FW_ROUTE_TABLE_ADDR = 0x14D00; // must match eth fw
+static constexpr uint32_t ETH_FW_BCAST_TABLE_ADDR = 0x14F00; // must match eth fw
+static void eth_fw_write_topology_tables(uint32_t tile_id) {
     uint8_t *sram = &g_e_tiles[tile_id].sram[0];
     uint32_t n = 0;
+    // Route forward table: The sibling eth tiles that are directly connected to the remote chip
     for (const EthLink &link : ETH_PEER_TABLE) {
         if (link.src_chip != g_current_chip_id) {
             continue;
@@ -376,6 +354,34 @@ static void eth_fw_write_route_table(uint32_t tile_id) {
         n++;
     }
     mem_wr<uint32_t>(&sram[ETH_FW_ROUTE_TABLE_ADDR], n);
+
+    // Broadcast forward table: the distinct tunneled-remote peer chips (id >= NUM_MMIO_CHIPS) this chip
+    // forwards an eth broadcast to. MMIO-sibling peers are excluded here.
+    uint32_t bn = 0;
+    for (const EthLink &link : ETH_PEER_TABLE) {
+        if (link.src_chip != g_current_chip_id || link.dst_chip < NUM_MMIO_CHIPS) {
+            continue;
+        }
+        uint32_t coord = chip_id_to_coord(link.dst_chip);
+        bool dup = false;
+        for (uint32_t j = 0; j < bn; j++) {
+            if (mem_rd<uint32_t>(&sram[ETH_FW_BCAST_TABLE_ADDR + 4 + 4 * j]) == coord) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) {
+            mem_wr<uint32_t>(&sram[ETH_FW_BCAST_TABLE_ADDR + 4 + 4 * bn], coord);
+            bn++;
+        }
+    }
+    mem_wr<uint32_t>(&sram[ETH_FW_BCAST_TABLE_ADDR], bn);
+}
+
+// Encode `jal x0, target`
+static constexpr uint32_t eth_jal_x0(uint32_t target) {
+    return 0x6Fu | (((target >> 20) & 1) << 31) | (((target >> 1) & 0x3FF) << 21) |
+           (((target >> 11) & 1) << 20) | (((target >> 12) & 0xFF) << 12);
 }
 #endif
 
@@ -522,17 +528,23 @@ bool wh_x2_legacy_remote_queue_host_wr(uint32_t coord, uint64_t addr, const void
 // delivery so the advertised topology cannot drift from the routed one.
 static void wh_x2_eth_link_init(uint32_t tile_id) {
 #if NUM_CHIPS > 1
+    constexpr uint32_t eth_fw_base = 0x13000;
+    constexpr uint32_t eth_fw_scratch_base = 0x14800;
     EthTile *p_tile = &g_e_tiles[tile_id];
     uint32_t remote_chip_id = 0;
     uint32_t remote_eth_id = 0;
     if (g_eth_fw_routing) {
-        eth_fw_write_route_table(tile_id);
+        static_assert(eth_fw_base + sizeof(eth_fw_blob) <= eth_fw_scratch_base);
+        memcpy(&p_tile->sram[eth_fw_base], eth_fw_blob, sizeof(eth_fw_blob));
+        ttsim_rv32_set_core_active('E', tile_id, 0, true);
+        p_tile->soft_reset_0 = 0;
+        p_tile->rv32[0].pc = eth_fw_base;
+        mem_wr<uint32_t>(&p_tile->sram[0], eth_jal_x0(eth_fw_base)); // seed reset pc with jump to fw
+        eth_fw_write_topology_tables(tile_id);
     }
     if (eth_peer(tile_id, &remote_chip_id, &remote_eth_id)) {
         if (g_eth_fw_routing) {
-            p_tile->rv32[0].pc = p_tile->ierisc_reset_pc;
-            ttsim_rv32_set_core_active('E', tile_id, 0, true);
-            p_tile->soft_reset_0 = 0;
+            p_tile->ierisc_reset_pc = eth_fw_base;
         }
         mem_wr<uint32_t>(&p_tile->sram[0x1104], 1); // ETH_TRAIN_STATUS_ADDR = LINK_TRAIN_SUCCESS
         mem_wr<uint32_t>(&p_tile->sram[0x104C], 0); // ROUTING_FIRMWARE_STATE = enabled
@@ -563,6 +575,45 @@ bool wh_x2_legacy_remote_queue_host_wr(uint32_t coord, uint64_t addr, const void
 }
 #endif
 
+#if TT_ARCH_VERSION == 1
+// Fake the eth base-FW boot_results that the active-erisc app (and UMD) read to confirm a
+// link state -- the base FW that writes these after link training is faked out. A tile with
+// an inter-chip peer advertises a trained, connected link; every other tile reports the link
+// down. UMD polls port_status until it leaves PORT_UNKNOWN, so an unpeered tile must still
+// report a terminal PORT_DOWN. Offsets per tt-metal blackhole eth_fw_api.h boot_results_t at
+// MEM_SYSENG_BOOT_RESULTS_BASE 0x7CC00 (eth_status @ 0, eth_live_status @ 512, eth_fw_ver @ 0x3BC,
+// local_info @ 0x3C0, remote_info @ 0x3E0; chip_info fields: asic_location +1, eth_id +2,
+// logical_eth_id +3, board_id_hi +4, board_id_lo +8).
+static void bh_eth_link_init(uint32_t tile_id) {
+    EthTile *p_tile = &g_e_tiles[tile_id];
+    uint32_t remote_chip = 0, remote_eth = 0;
+    if (eth_peer(tile_id, &remote_chip, &remote_eth)) {
+        mem_wr<uint32_t>(&p_tile->sram[0x7CC04], 1); // eth_status.port_status = PORT_UP
+        mem_wr<uint32_t>(&p_tile->sram[0x7CC08], 2); // eth_status.train_status = LINK_TRAIN_PASS
+        mem_wr<uint32_t>(&p_tile->sram[0x7CE04], 1); // eth_live_status.rx_link_up = 1
+        constexpr uint32_t LOCAL = 0x7CFC0, REMOTE = 0x7CFE0;
+        mem_wr<uint8_t>(&p_tile->sram[LOCAL + 1], uint8_t(g_current_chip_id)); // asic_location
+        mem_wr<uint8_t>(&p_tile->sram[LOCAL + 2], uint8_t(tile_id)); // eth_id
+        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 4], BOARD_ID_HIGH); // board_id_hi
+        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 8], BOARD_ID_LOW); // board_id_lo
+        mem_wr<uint8_t>(&p_tile->sram[REMOTE + 1], uint8_t(remote_chip)); // asic_location
+        mem_wr<uint8_t>(&p_tile->sram[REMOTE + 2], uint8_t(remote_eth)); // eth_id (remote channel)
+        mem_wr<uint8_t>(&p_tile->sram[REMOTE + 3], uint8_t(remote_eth)); // logical_eth_id
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 4], BOARD_ID_HIGH); // board_id_hi
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 8], BOARD_ID_LOW); // board_id_lo
+        p_tile->soft_reset_0 &= ~0x800u;
+    } else {
+        mem_wr<uint32_t>(&p_tile->sram[0x7CC04], 2); // eth_status.port_status = PORT_DOWN (no link)
+    }
+    mem_wr<uint8_t>(&p_tile->sram[0x7CFBE], 1); // major
+    mem_wr<uint8_t>(&p_tile->sram[0x7CFBD], 6); // minor
+    mem_wr<uint8_t>(&p_tile->sram[0x7CFBC], 0); // patch
+    // eth_status.postcode reports how far the base FW's eth_init() got; tt-metal waits for a terminal
+    // value (PASS/FAIL/SKIP) on every idle eth core before resetting it. Init completes -> PASS.
+    mem_wr<uint32_t>(&p_tile->sram[0x7CC00], 0xC0DEA000); // eth_status.postcode = POSTCODE_ETH_INIT_PASS
+}
+#endif
+
 void a_tile_init() {
 #if TT_ARCH_VERSION == 0
     g_a_tile.reset_unit_scratch[0] = 0xC0DE0001;
@@ -586,6 +637,10 @@ void a_tile_init() {
 #if TT_ARCH_VERSION == 0
     board_id_low = chip_board_serial(g_current_chip_id); // per-card serial so UMD groups n300 cards correctly
 #endif
+
+#if TT_ARCH_VERSION == 1
+    uint32_t pcie_usage = (g_current_chip_id & 1) ? 4 : 1;
+#endif
     const struct {
         uint16_t tag;
         uint32_t value;
@@ -594,13 +649,19 @@ void a_tile_init() {
         {2, board_id_low},
         {3, 1 + g_current_chip_id},     // ASIC_ID
         {4, 0x0},                       // HARVESTING_STATE
+        {11, 40u << 16},                // ASIC_TEMPERATURE: 40 C
+        {13, 35u << 16},                // BOARD_TEMPERATURE: 35 C
         {14, 1000},                     // AICLK (MHz)
+        {15, 900},                      // AXICLK (MHz)
+        {16, 540},                      // ARCCLK (MHz)
+        {21, ETH_LIVE_STATUS_MASK},     // ETH_LIVE_STATUS: one bit per live eth tile
+        {22, GDDR_STATUS_TRAINED},      // GDDR_STATUS: all channels trained (2 bits/channel, 0b01)
         {28, FLASH_BUNDLE_VERSION},
+        {32, 1},                        // TIMER_HEARTBEAT
         {52, g_current_chip_id},        // ASIC_LOCATION
 #if TT_ARCH_VERSION == 1
-        {38, 0x1},                      // PCIE_USAGE: PCIe 0 endpoint, PCIe 1 harvested (the sim only
-                                        // models PCIe 0 at (2,0)) -> pcie_harvesting_mask 0x2 (P150)
-        {35, 0x3FFC},                   // ENABLED_ETH: eth cores 0,1 harvested
+        {38, pcie_usage},               // PCIE_USAGE
+        {35, 0x0FFF},                   // ENABLED_ETH: harvest the top 2 eth channels (12,13)
         {61, 0x0},                      // ASIC_ID_HIGH
         {62, 1 + g_current_chip_id},    // ASIC_ID_LOW
 #endif
@@ -1041,7 +1102,7 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
             p_tile->dbg_array_rd_cmd = data;
             break;
         case RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE:
-            TTSIM_VERIFY(!data || (data == 0x800), UnimplementedFunctionality, "DBG_FEATURE_DISABLE=0x%x", data);
+            TTSIM_VERIFY(!data, UnsupportedFunctionality, "DBG_FEATURE_DISABLE=0x%x", data);
             p_tile->tensix[0].dst_32bit_addr_en = bits<11,11>(data);
             break;
         case RISCV_DEBUG_REGS_SOFT_RESET_0: {
@@ -1438,12 +1499,18 @@ static void noc_cmd_ctrl(uint32_t tile_id, uint32_t noc_instance, uint32_t cmd_b
     auto [src_tile_type, src_tile_id] = coord_to_tile(src_coordinate);
     auto [dst_tile_type, dst_tile_id] = coord_to_tile(dst_coordinate);
 
-    if (bits<5,5>(noc_ctrl)) { // multicast -- always L1 to L1 right now
+    if (bits<5,5>(noc_ctrl)) { // multicast
         TTSIM_VERIFY((noc_at_len_be >= 1) && (noc_at_len_be <= NOC_MAX_PACKET_SIZE), UnsupportedFunctionality, "multicast: noc_at_len_be=%d", noc_at_len_be);
         TTSIM_VERIFY(src_tile_type == tile_type, UnimplementedFunctionality, "multicast: src_tile_type=%c", src_tile_type);
         TTSIM_VERIFY(src_tile_id == tile_id, UnimplementedFunctionality, "multicast: src_tile_id=0x%x", src_tile_id); // write must be from current tile
         TTSIM_VERIFY(src_addr + noc_at_len_be <= sizeof(p_tile->sram), UnsupportedFunctionality, "multicast: src_addr=0x%llx", src_addr);
-        TTSIM_VERIFY(dst_addr + noc_at_len_be <= TENSIX_SRAM_SIZE, UnsupportedFunctionality, "multicast: dst_addr=0x%llx", dst_addr);
+
+        if (dst_addr < TENSIX_SRAM_SIZE) { // L1 -> L1
+            TTSIM_VERIFY(dst_addr + noc_at_len_be <= TENSIX_SRAM_SIZE, UnsupportedFunctionality, "multicast: dst_addr=0x%llx", dst_addr);
+        } else { // L1 -> MMIO
+            TTSIM_VERIFY(noc_at_len_be == 4, UnsupportedFunctionality, "multicast register write: dst_addr=0x%llx len=%d", dst_addr, noc_at_len_be);
+            TTSIM_VERIFY(!(dst_addr & 3), UnimplementedFunctionality, "multicast register write: misaligned dst_addr=0x%llx", dst_addr);
+        }
         TTSIM_VERIFY((src_addr & 15) == (dst_addr & 15), UnimplementedFunctionality, "multicast: alignment of src_addr=0x%llx and dst_addr=0x%llx does not match",
             src_addr, dst_addr);
 
@@ -2227,6 +2294,10 @@ static uint32_t e_tile_mmio_rd32(uint32_t tile_id, uint64_t addr) {
 static bool e_tile_mmio_wr32(uint32_t tile_id, uint64_t addr, uint32_t data) {
     EthTile *p_tile = &g_e_tiles[tile_id];
     switch (addr) {
+#if TT_ARCH_VERSION == 0
+        case 0xFFB12FF0: // ETH_FW_SIM_ERROR_ADDR (must match fw/eth/eth_fw.c)
+            TTSIM_ERROR(UndefinedBehavior, "eth base fw reported error code %u on eth tile %u", data, tile_id);
+#endif
         case RISCV_DEBUG_REGS_BASE + RISCV_DEBUG_REGS_SOFT_RESET_0:
             data &= ~(TT_ARCH_VERSION ? 0x80046000 : 0x80047000); // ignored bits written by UMD
 #if TT_ARCH_VERSION == 1
@@ -2430,29 +2501,19 @@ static void arc_service_message(uint8_t code, uint32_t *resp) {
     uint32_t exit_code = 0;
 #endif
     switch (code) {
-        case 0x2C: // GET_SMBUS_TELEMETRY_ADDR
 #if TT_ARCH_VERSION == 0
+        case 0x2C: // GET_SMBUS_TELEMETRY_ADDR
             *resp = ARC_SMBUS_TELEMETRY_CSM_OFFSET;
-#elif TT_ARCH_VERSION == 1
-            TTSIM_ERROR(UnimplementedFunctionality, "arc message code=0x%x", code);
-#endif
             break;
         case 0x34: // GET_AICLK
-#if TT_ARCH_VERSION == 0
             *resp = 1000; // AI CLK = 1000MHz
-#elif TT_ARCH_VERSION == 1
-            TTSIM_ERROR(UnimplementedFunctionality, "arc message code=0x%x", code);
-#endif
             break;
+#endif
         case 0x57: // ARC_GET_HARVESTING
             *resp = 0; // nothing harvested
             break;
         case 0x58: // SET_ETH_DRAM_TRAINED_STATUS
-#if TT_ARCH_VERSION == 0
-            *resp = 1;
-#elif TT_ARCH_VERSION == 1
-            TTSIM_ERROR(UnimplementedFunctionality, "arc message code=0x%x", code);
-#endif
+            *resp = 1; // report DRAM training complete
             break;
         case 0x11: // NOP
         case 0x21: // POWER_SETTING
@@ -2464,7 +2525,7 @@ static void arc_service_message(uint8_t code, uint32_t *resp) {
         case 0x90: // TEST
         case 0xA0: // ASIC_STATE0
         case 0xA3: // ASIC_STATE3
-        case 0xB6: // PCIE_RETRAIN
+        case 0xB6: // PCIE_RETRAIN (WH) / TOGGLE_GDDR_RESET (BH)
         case 0xB7: // CURR_DATE
         case 0xBC: // UPDATE_M3_AUTO_RESET_TIMEOUT
         case 0xBA: // DEASSERT_RISCV_RESET
@@ -2748,6 +2809,7 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
                 uint32_t old_data = mem_rd<uint32_t>(&g_e_tiles[tile_id].sram[addr]);
                 if ((data == 1) && (old_data != 1)) { // Start active erisc core
                     g_e_tiles[tile_id].rv32[0].pc = 0x9040; // FIRMWARE_BASE
+                    g_e_tiles[tile_id].rv32[0].x_regs[1] = g_e_tiles[tile_id].ierisc_reset_pc;
                     g_e_tiles[tile_id].rv32[0].x_regs[2] = 0xFFB01000;
                     ttsim_rv32_set_core_active('E', tile_id, 0, true);
                 } else if ((data == 0) && (old_data == 1)) { // Stop active erisc core

@@ -11,6 +11,30 @@ _start:
 loop:
     j loop
 
+// Call a launched kernel with the erisc kernel ABI in place: a0 = entry, a1 = gp
+// (__global_pointer$), a2 = sp (stack top). The base fw runs with its own gp/sp, so save them and
+// restore on return. s0/s1 hold the fw's sp/gp across the call -- the kernel preserves callee-saved
+// registers per the RISC-V ABI (and yields back through eth_service, which does not depend on gp).
+.section .text, "ax"
+.global eth_call_kernel
+eth_call_kernel:
+    addi sp, sp, -16
+    sw   ra, 0(sp)
+    sw   s0, 4(sp)
+    sw   s1, 8(sp)
+    mv   s0, sp    // save fw sp
+    mv   s1, gp    // save fw gp
+    mv   gp, a1    // kernel gp
+    mv   sp, a2    // kernel sp
+    jalr a0        // run the kernel
+    mv   sp, s0    // restore fw sp
+    mv   gp, s1    // restore fw gp
+    lw   ra, 0(sp)
+    lw   s0, 4(sp)
+    lw   s1, 8(sp)
+    addi sp, sp, 16
+    ret
+
 // Yield entry the active-erisc app calls (via the *0x9020 pointer) to let the base fw run its
 // housekeeping while the app holds the core. Per the eth ABI (CallingIntoCustomerCode.md) the only
 // register this call may perturb is ra, so save/restore every caller-saved temporary/argument

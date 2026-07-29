@@ -50,11 +50,12 @@ def rules(ctx):
         chip_gen_h_files[chip] = gen_h_files + [target]
 
         if tt_arch_version == 0:
-            target = f'_out/{chip}/eth_fw_blob.h'
             script = 'gen_fw_blob.py'
-            dep = f'../data/{chip}/eth_fw.bin'
-            ctx.rule(target, [script, dep], cmd=['python3', script, '--bin', dep, '--out', target])
-            chip_gen_h_files[chip] += [target]
+            for name in ('eth_fw',):
+                target = f'_out/{chip}/{name}_blob.h'
+                dep = f'../data/{chip}/{name}.bin'
+                ctx.rule(target, [script, dep], cmd=['python3', script, '--bin', dep, '--out', target])
+                chip_gen_h_files[chip] += [target]
 
         target = f'_out/{chip}/tensix_regs.h'
         script = 'tensix_gen_regs.py'
