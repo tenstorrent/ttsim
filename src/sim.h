@@ -502,8 +502,8 @@ struct IatuRegion {
 #endif
 };
 
-#if TT_ARCH_VERSION == 0
 struct DmaEngine {
+#if TT_ARCH_VERSION == 0
     uint32_t write_engine_en;
     uint32_t write_doorbell;
     uint32_t write_int_mask;
@@ -532,8 +532,22 @@ struct DmaEngine {
     uint32_t read_sar_high;
     uint32_t read_dar_low;
     uint32_t read_dar_high;
-};
+#elif TT_ARCH_VERSION == 1
+    uint32_t read_engine_en;
+    uint32_t read_doorbell;
+    uint32_t read_transfer_size;
+    uint32_t read_sar_low;
+    uint32_t read_sar_high;
+    uint32_t read_dar_low;
+    uint32_t read_dar_high;
+    uint32_t read_int_setup;
+    uint32_t read_msi_stop_low;
+    uint32_t read_msi_stop_high;
+    uint32_t read_msi_abort_low;
+    uint32_t read_msi_abort_high;
+    uint32_t read_msi_msgd;
 #endif
+};
 
 #if TT_ARCH_VERSION == 1
 uint32_t pcie_niu_rd32(uint32_t noc_instance, uint32_t offset);
@@ -551,9 +565,9 @@ struct PcieTile {
     uint32_t pci_cfg_interrupt_line_pin;
     IatuRegion iatu_outbound[16];
     IatuRegion iatu_inbound[16];
+    DmaEngine dma;
 #if TT_ARCH_VERSION == 0
     uint64_t tlb_cfg[186];
-    DmaEngine dma;
 #elif TT_ARCH_VERSION == 1
     uint32_t tlb_cfg[210*3];
     uint32_t dbi_device_control;

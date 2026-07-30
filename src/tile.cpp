@@ -1103,7 +1103,7 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
             break;
         case RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE:
             TTSIM_VERIFY(!data, UnsupportedFunctionality, "DBG_FEATURE_DISABLE=0x%x", data);
-            p_tile->tensix[0].dst_32bit_addr_en = bits<11,11>(data);
+            p_tile->tensix[0].dst_32bit_addr_en = false;
             break;
         case RISCV_DEBUG_REGS_SOFT_RESET_0: {
             data &= 0x7FFFFFFF; // ignore bit 31 written by UMD

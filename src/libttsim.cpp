@@ -59,6 +59,11 @@
 #define IATU_LIMIT 0x2FFFull
 #define INCREASE_REGION_SIZE (1u << 13) // region_ctrl_1: extends a region past 4GiB
 #define IATU_OUTBOUND_WINDOW_LIMIT ((1ull << 58) - 1) // NoC-to-host window is 2^58 bytes
+
+// BH BAR2 read DMA channel 0 registers
+#define DMA_RDCH0_BASE 0x100
+#define DMA_RDCH0_LIMIT 0x1A8
+#define DMA_BUFFER_SIZE (4u * 1024)
 #endif
 
 static bool s_ttsim_running = false;
@@ -157,8 +162,8 @@ extern "C" API_EXPORT void libttsim_init() {
     }
     if (char *s = getenv("TTSIM_ETH_FW_ROUTING")) {
         TTSIM_VERIFY(TT_ARCH_VERSION == 0, ConfigurationError, "TTSIM_ETH_FW_ROUTING is only valid for WH");
-        TTSIM_VERIFY(!strcmp(s, "1"), ConfigurationError, "TTSIM_ETH_FW_ROUTING must be set to 1");
-        g_eth_fw_routing = true;
+        TTSIM_VERIFY(!strcmp(s, "0"), ConfigurationError, "TTSIM_ETH_FW_ROUTING must be set to 0");
+        g_eth_fw_routing = false;
     }
     ttsim_init();
     for (uint32_t d = 0; d < NUM_MMIO_CHIPS; d++) {
@@ -399,9 +404,9 @@ static void tlb_window_read(uint32_t offset, void *p, uint32_t size) {
 #endif
 }
 
-#if TT_ARCH_VERSION == 0
 static uint32_t *dma_reg_ptr(uint32_t offset) {
     switch (offset) {
+#if TT_ARCH_VERSION == 0
         case 0x208: return &g_p_tile.dma.write_transfer_size;
         case 0x20c: return &g_p_tile.dma.write_sar_low;
         case 0x214: return &g_p_tile.dma.write_dar_low;
@@ -430,6 +435,21 @@ static uint32_t *dma_reg_ptr(uint32_t offset) {
         case 0x0d8: return &g_p_tile.dma.read_abort_imwr_high;
         case 0x300: return &g_p_tile.dma.read_control1;
         case 0x318: return &g_p_tile.dma.read_dar_high;
+#elif TT_ARCH_VERSION == 1
+        case 0x100: return &g_p_tile.dma.read_engine_en;
+        case 0x104: return &g_p_tile.dma.read_doorbell;
+        case 0x11C: return &g_p_tile.dma.read_transfer_size;
+        case 0x120: return &g_p_tile.dma.read_sar_low;
+        case 0x124: return &g_p_tile.dma.read_sar_high;
+        case 0x128: return &g_p_tile.dma.read_dar_low;
+        case 0x12C: return &g_p_tile.dma.read_dar_high;
+        case 0x188: return &g_p_tile.dma.read_int_setup;
+        case 0x190: return &g_p_tile.dma.read_msi_stop_low;
+        case 0x194: return &g_p_tile.dma.read_msi_stop_high;
+        case 0x1A0: return &g_p_tile.dma.read_msi_abort_low;
+        case 0x1A4: return &g_p_tile.dma.read_msi_abort_high;
+        case 0x1A8: return &g_p_tile.dma.read_msi_msgd;
+#endif
         default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
     }
 }
@@ -448,11 +468,16 @@ static void dma_read_engine() { // H2D
         tlb_window_write(dev_dst + off, dma_buffer, chunk);
         off += chunk;
     }
-    // signal completion
+#if TT_ARCH_VERSION == 0
+    // signal completion via imwr write into sysmem
     uint64_t rd_done_addr = uint64_t(g_p_tile.dma.read_done_imwr_low) | (uint64_t(g_p_tile.dma.read_done_imwr_high) << 32);
     libttsim_pci_dma_mem_wr_bytes(rd_done_addr, &g_p_tile.dma.read_imwr_data, 4);
+#else
+    g_p_tile.dma.read_transfer_size = 0; // signal completion
+#endif
 }
 
+#if TT_ARCH_VERSION == 0
 static void dma_write_engine() { // D2H
     uint32_t size = g_p_tile.dma.write_transfer_size;
     TTSIM_VERIFY(size && !(size & 3), UndefinedBehavior, "size=%d", size);
@@ -524,10 +549,13 @@ static void pci_mem_rd_cur(uint64_t paddr, void *p, uint32_t size) {
             uint32_t offset = paddr - BAR2_BASE;
             switch (offset) {
 #if TT_ARCH_VERSION == 0
-                case 0x0 ... IATU_BASE - 1: {
+                case 0x0 ... IATU_BASE - 1:
                     mem_wr<uint32_t>(p, *dma_reg_ptr(offset));
                     break;
-                }
+#elif TT_ARCH_VERSION == 1
+                case DMA_RDCH0_BASE ... DMA_RDCH0_LIMIT:
+                    mem_wr<uint32_t>(p, *dma_reg_ptr(offset));
+                    break;
 #endif
                 case IATU_BASE ... IATU_LIMIT:
                     mem_wr<uint32_t>(p, *iatu_reg_field(offset - IATU_BASE));
@@ -663,6 +691,16 @@ static void pci_mem_wr_cur(uint64_t paddr, const void *p, uint32_t size) {
                         } else { // DMA_READ_DOORBELL: host -> device
                             dma_read_engine();
                         }
+                    }
+                    break;
+                }
+#elif TT_ARCH_VERSION == 1
+                case DMA_RDCH0_BASE ... DMA_RDCH0_LIMIT: {
+                    uint32_t value = mem_rd<uint32_t>(p);
+                    *dma_reg_ptr(offset) = value;
+                    if (offset == 0x104) { // ring doorbell: host -> device
+                        TTSIM_VERIFY(value == 1, UnimplementedFunctionality, "bar2: DMA doorbell=0x%x", value);
+                        dma_read_engine();
                     }
                     break;
                 }

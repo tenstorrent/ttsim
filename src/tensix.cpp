@@ -1628,7 +1628,7 @@ static bool tensix_elw_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst, ui
         TTSIM_VERIFY((src_a_fmt == 0) || (src_a_fmt == 4) || (src_a_fmt == 5) || (src_a_fmt == 6) || (src_a_fmt == 7) || (src_a_fmt == 15),
             UnimplementedFunctionality, "bf16 src_a_fmt=%d src_b_fmt=%d", src_a_fmt, src_b_fmt); // fp32, tf32, bf16, bfp8, bfp4, bfp2
         TTSIM_VERIFY((src_b_fmt == 0) || (src_b_fmt == 4) || (src_b_fmt == 5) || (src_b_fmt == 6) || (src_b_fmt == 7) ||
-                     (src_b_fmt == 8) || (src_b_fmt == 9) || (src_a_fmt == 15),
+                     (src_b_fmt == 8) || (src_b_fmt == 9) || (src_b_fmt == 15),
             UnimplementedFunctionality, "bf16 src_a_fmt=%d src_b_fmt=%d", src_a_fmt, src_b_fmt); // fp32, tf32, bf16, bfp8, bfp4, int32, int16, bfp2
     }
     bool use_dst32b = is_int8 || p_config->ALU_ACC_CTRL_Fp32_enabled;
