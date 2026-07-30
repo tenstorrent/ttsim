@@ -60,7 +60,7 @@ The included source can be built locally:
 Requires g++ with C++20 support and Python 3.8+. Builds release `.so` files at
 `src/_out/release_wh/libttsim.so` and `src/_out/release_bh/libttsim.so`, functionally
 equivalent to the corresponding GitHub Releases binaries (and byte-identical when built
-on the same toolchain as our release CI: `ubuntu-22.04` with its default g++).
+on the same toolchain as our release CI: `ubuntu-24.04` with its default g++).
 
 For the `libttsim.so` programmatic interface - the exported C entry points, the ABI, and the
 compatibility policy that governs them - see [libttsim API and ABI](docs/libttsim_api.md).
