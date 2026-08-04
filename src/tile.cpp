@@ -284,8 +284,10 @@ void e_tile_init(uint32_t tile_id) {
 #define ARC_MSG_ENTRY_SIZE 32
 #if NUM_CHIPS == 1
 #define BOARD_ID_HIGH 0x400 // P150
-#else
+#elif NUM_CHIPS == 2
 #define BOARD_ID_HIGH 0x440 // P300
+#elif NUM_CHIPS == 32
+#define BOARD_ID_HIGH 0x470 // UBB Blackhole
 #endif
 #define BOARD_ID_LOW 0x1
 #endif
@@ -547,7 +549,7 @@ static void wh_x2_eth_link_init(uint32_t tile_id) {
             p_tile->ierisc_reset_pc = eth_fw_base;
         }
         mem_wr<uint32_t>(&p_tile->sram[0x1104], 1); // ETH_TRAIN_STATUS_ADDR = LINK_TRAIN_SUCCESS
-        mem_wr<uint32_t>(&p_tile->sram[0x104C], 0); // ROUTING_FIRMWARE_STATE = enabled
+        mem_wr<uint32_t>(&p_tile->sram[0x104C], NUM_CHIPS == 32); // ROUTING_FIRMWARE_STATE: 1 = disabled on 6U
         mem_wr<uint32_t>(&p_tile->sram[0x1C], 1); // ETH_HEARTBEAT_ADDR
         mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 64], wh_mangled_board_id(g_current_chip_id)); // local board id lo
         mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 65], g_current_chip_id); // local ASIC id hi
@@ -597,6 +599,10 @@ static void bh_eth_link_init(uint32_t tile_id) {
         mem_wr<uint32_t>(&p_tile->sram[LOCAL + 4], BOARD_ID_HIGH); // board_id_hi
         mem_wr<uint32_t>(&p_tile->sram[LOCAL + 8], BOARD_ID_LOW); // board_id_lo
         mem_wr<uint8_t>(&p_tile->sram[REMOTE + 1], uint8_t(remote_chip)); // asic_location
+        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 20], 0); // asic_id_hi
+        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 24], 1 + g_current_chip_id); // asic_id_lo
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 20], 0); // asic_id_hi
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 24], 1 + remote_chip); // asic_id_lo
         mem_wr<uint8_t>(&p_tile->sram[REMOTE + 2], uint8_t(remote_eth)); // eth_id (remote channel)
         mem_wr<uint8_t>(&p_tile->sram[REMOTE + 3], uint8_t(remote_eth)); // logical_eth_id
         mem_wr<uint32_t>(&p_tile->sram[REMOTE + 4], BOARD_ID_HIGH); // board_id_hi
@@ -2819,11 +2825,11 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
 #elif TT_ARCH_VERSION == 1
             // Fake the cooperative eth base-FW + active-erisc launch handshake. metal posts a go
             // message (go_msg_t) with signal=RUN_MSG_INIT (0x40, the top byte) to the active-erisc
-            // mailbox go_messages[0] at L1 0x490, then polls for RUN_MSG_DONE. The real eth base FW
+            // mailbox go_messages[0] at L1 0x590, then polls for RUN_MSG_DONE. The real eth base FW
             // and app (which ttsim fakes as no-ops) would process the launch and ack; emulate the
             // ack by storing the message with the signal byte cleared to RUN_MSG_DONE (0) so device
             // init proceeds. (RUN_MSG_* and go_msg_t.signal per tt-metal dev_msgs.h.)
-            if (addr == 0x490 && size == 4 && (mem_rd<uint32_t>(p) >> 24) == 0x40) {
+            if (addr == 0x590 && size == 4 && (mem_rd<uint32_t>(p) >> 24) == 0x40) {
                 mem_wr<uint32_t>(&g_e_tiles[tile_id].sram[addr], mem_rd<uint32_t>(p) & 0x00FFFFFF);
                 return;
             }
@@ -2831,26 +2837,27 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
             // router / EDM). On silicon the active-erisc base FW, on GO, computes the kernel entry
             // from the launch message, sets up gp/sp, runs setup_kernel_launch_args(), and jumps in;
             // ttsim fakes the base FW, so emulate that launch here. The launch message lives in the
-            // active-erisc mailbox (base 0x100; mailboxes_t go_messages[0] is at 0x490). Field offsets
-            // per tt-metal dev_msgs.h (BH ProgrammableCoreType::COUNT=4, MaxProcessorsPerCoreType=5):
-            // launch_msg_rd_ptr @ base+12; launch[] @ base+16 (stride sizeof(kernel_config_msg_t)=112);
+            // active-erisc mailbox (base 0x100; mailboxes_t go_messages[0] offset 0x490,
+            // L1 address 0x590). Field offsets per tt-metal dev_msgs.h
+            // (BH ProgrammableCoreType::COUNT=4, MaxProcessorsPerCoreType=5):
+            // launch_msg_rd_ptr @ base+12; launch[] @ base+16 (stride sizeof(launch_msg_t)=144);
             // kernel_config_base[ACTIVE_ETH=1] @ launch+4; rta_offset[DM0=0] @ launch+28 (rta) / +30
             // (crta); kernel_text_offset[DM0=0] @ launch+52.
             //
             // ONLY for ACTIVE eth cores (those with an inter-chip peer, running the active-erisc app).
-            // An IDLE eth core posts the same GO to 0x490 but is launched by the idle-erisc base FW,
+            // An IDLE eth core posts the same GO to 0x590 but is launched by the idle-erisc base FW,
             // which reads kernel_config_base[IDLE_ETH] (index 2), not [ACTIVE_ETH] -- and ttsim runs
             // its kernel via the soft-reset / ierisc_reset_pc path instead (see SOFT_RESET_0 above).
             // Intercepting an idle core's GO here would jump to a bogus ACTIVE_ETH entry (e.g. on a
             // single-chip part every eth core is idle: regression at b0bca86). So gate on eth_peer and
             // otherwise fall through to the plain mailbox store.
             uint32_t go_peer_chip, go_peer_tile;
-            if (addr == 0x490 && size == 4 && (mem_rd<uint32_t>(p) >> 24) == 0x80 &&
+            if (addr == 0x590 && size == 4 && (mem_rd<uint32_t>(p) >> 24) == 0x80 &&
                 eth_peer(tile_id, &go_peer_chip, &go_peer_tile)) {
                 memcpy(&g_e_tiles[tile_id].sram[addr], p, size);
                 const uint8_t *l1 = g_e_tiles[tile_id].sram;
                 uint32_t rd_ptr = mem_rd<uint32_t>(&l1[0x100 + 12]);
-                uint32_t launch = 0x100 + 16 + rd_ptr * 112;
+                uint32_t launch = 0x100 + 16 + rd_ptr * 144;
                 uint32_t kcfg_base = mem_rd<uint32_t>(&l1[launch + 4]); // kernel_config_base[ACTIVE_ETH]
                 uint32_t entry = kcfg_base + mem_rd<uint32_t>(&l1[launch + 52]);
                 // The base FW runs setup_kernel_launch_args() (firmware_common.h) before jumping: it

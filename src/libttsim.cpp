@@ -817,11 +817,11 @@ static void clock_current_chip() {
         // RUN_MSG_GO; emulate that by parking the core (reactivated by the next GO) instead of
         // executing the 0x0 guard as an illegal instruction. The base FW also flips the go-message
         // signal to RUN_MSG_DONE (0) so the host (llrt::wait_until_cores_done, polling the GO_MSG
-        // mailbox at L1 0x490) sees the program complete; mimic that by clearing the signal byte.
+        // mailbox at L1 0x590) sees the program complete; mimic that by clearing the signal byte.
         // Rare (once per kernel return); [[unlikely]] keeps it off the hot per-instruction path.
         if (!p_hart->pc) [[unlikely]] {
             ttsim_rv32_set_core_active('E', tile_id, rv32_index, false);
-            g_e_tiles[tile_id].sram[0x490 + 3] = 0; // go_messages[0].signal = RUN_MSG_DONE
+            g_e_tiles[tile_id].sram[0x590 + 3] = 0; // go_messages[0].signal = RUN_MSG_DONE
             continue;
         }
 #endif

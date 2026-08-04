@@ -3,6 +3,7 @@
 
 // Mock Wormhole Ethernet base firmware, run on the erisc cores.
 #include <stdint.h>
+#include <stdbool.h>
 
 #define ETH_HEARTBEAT_ADDR 0x1C
 #define BASE_FW_HEARTBEAT_SIGNATURE 0xABCDu
@@ -146,6 +147,7 @@ extern void eth_yield_entry(void);
 #define BCAST_STAGE_ADDR (BLOCK_BUF_ADDR + BROADCAST_HEADER_SIZE)
 #define BCAST_CHUNK 2048u
 
+#define ROUTING_FIRMWARE_STATE 0x104C
 // Multi-hop relay. UMD round-robins each remote-queue command over ALL of an MMIO chip's active eth
 // cores, so a command whose target chip is peered by a SIBLING eth core (not this one's link peer) is
 // forwarded over the on-chip NOC to that egress core; the egress does the single eth hop and returns the
@@ -260,6 +262,10 @@ static void eth_send(uint32_t dst, uint32_t src, uint32_t size) {
 
 // --- Multi-hop relay: route a command to the local eth core that peers its target chip (see ROUTE_TABLE) ---
 static uint32_t my_noc_coord(void) { return PHYS_RD32(NOC0_REGS_BASE + NOC_NODE_ID) & 0xFFF; }
+
+static inline bool routing_enabled(void) {
+    return PHYS_RD32(ROUTING_FIRMWARE_STATE) == 0;
+}
 
 // Mesh coord of the chip THIS eth core's link peers (from its own route-table entry).
 static uint32_t route_my_peer(void) {
@@ -653,7 +659,7 @@ static void service_request_queue(uint32_t *send_seq) {
 // while metal's app holds the core. State lives in L1 so it survives across those two call sites.
 // Non-static: referenced by the crt0 yield shim.
 void eth_service(void) {
-    if (route_my_peer() == 0xFFFFFFFF) {
+    if (!routing_enabled()) {
         return;
     }
     uint32_t send_seq = PHYS_RD32(SEND_SEQ_ADDR);
