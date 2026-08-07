@@ -14,6 +14,7 @@ CONFIGS = [
     (0, 'wh_x32', 'wh', 32, 32), # WH Galaxy (6U): 32 WH chips, 8x4 mesh, all MMIO (BDF)
     (1, 'bh',     'bh',  1,  1),
     (1, 'bh_x2',  'bh',  2,  2),
+    (1, 'bh_x4',  'bh',  4,  4), # QuietBox 2: two P300 cards, 2x2 mesh, all MMIO
     (1, 'bh_x32', 'bh', 32, 32), # BH Galaxy (6U): 32 BH chips, 8x4 mesh, all MMIO (BDF)
 ]
 

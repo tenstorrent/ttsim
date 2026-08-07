@@ -626,9 +626,6 @@ static inline void write_dst32b(TensixState *p_tensix, uint32_t row, uint32_t co
 
 template<bool is_gmpool = false>
 static inline uint16_t read_dst16b(TensixState *p_tensix, uint32_t row, uint32_t col) {
-    if (p_tensix->dst_32bit_addr_en) {
-        return read_dst32b<is_gmpool>(p_tensix, row, col) >> 16;
-    } else
     if (!p_tensix->dst_row_valid[row]) {
         return is_gmpool ? 0xFFFF : 0;
     } else {
@@ -639,14 +636,9 @@ static inline uint16_t read_dst16b(TensixState *p_tensix, uint32_t row, uint32_t
 template<bool set_valid_on_last_column_only = false>
 static inline void write_dst16b(TensixState *p_tensix, uint32_t row, uint32_t col, uint16_t data) {
     // XXX docs say this writes "something - generally garbage - to the low 16 bits", what to do?
-    if (p_tensix->dst_32bit_addr_en) {
-        write_dst32b<set_valid_on_last_column_only>(p_tensix, row, col, uint32_t(data) << 16);
-    } else
-    {
-        p_tensix->dst[row][col] = data;
-        if (!set_valid_on_last_column_only || (col == 15)) {
-            p_tensix->dst_row_valid[row] = true;
-        }
+    p_tensix->dst[row][col] = data;
+    if (!set_valid_on_last_column_only || (col == 15)) {
+        p_tensix->dst_row_valid[row] = true;
     }
 }
 
@@ -843,8 +835,10 @@ TENSIX_EXECUTE_MOVB2A() {
 }
 
 TENSIX_EXECUTE_ZEROACC() {
-#if TT_ARCH_VERSION == 1
+#if TT_ARCH_VERSION >= 1
     uint32_t dst = where; // this field was renamed
+#endif
+#if TT_ARCH_VERSION == 1
     clear_mode |= use_32_bit_mode << 2; // remap to be equivalent to WH fields
     if (clear_zero_flags) { // UndefinedBehavior() in spec, only supported in very limited cases for a HW bug workaround
         TTSIM_VERIFY(clear_mode == 5, UndefinedBehavior, "clear_zero_flags=%d is dangerous and should not be used (clear_mode=%d)", clear_zero_flags, clear_mode);
@@ -860,7 +854,7 @@ TENSIX_EXECUTE_ZEROACC() {
             dst += dst_offset;
             TTSIM_VERIFY(dst < DST_ROWS, UnimplementedFunctionality, "clear 1 row: dst=%d", dst);
             TTSIM_VERIFY(!p_config->ALU_ACC_CTRL_INT8_math_enabled, UnimplementedFunctionality, "ALU_ACC_CTRL_INT8_math_enabled");
-            if (p_config->ALU_ACC_CTRL_Fp32_enabled || p_tensix->dst_32bit_addr_en) {
+            if (p_config->ALU_ACC_CTRL_Fp32_enabled) {
                 p_tensix->dst_row_valid[dst32b_adjust_row(dst)] = false;
             } else {
                 p_tensix->dst_row_valid[dst] = false;
@@ -873,7 +867,6 @@ TENSIX_EXECUTE_ZEROACC() {
             }
 #endif
             TTSIM_VERIFY(dst < DST_ROWS / 16, NonContractualBehavior, "clear 16 rows: dst=%d", dst);
-            TTSIM_VERIFY(!p_tensix->dst_32bit_addr_en, UnimplementedFunctionality, "clear 16 rows: dst_32bit_addr_en=%d", p_tensix->dst_32bit_addr_en);
             for (uint32_t row = 0; row < 16; row++) {
                 p_tensix->dst_row_valid[dst*16 + row] = false;
             }
@@ -4650,7 +4643,7 @@ TENSIX_EXECUTE_STALLWAIT() {
         wait_res &= ~0x800;
     }
     TTSIM_VERIFY(!wait_res, UnimplementedFunctionality, "wait_res=0x%x", wait_res);
-#elif TT_ARCH_VERSION == 1
+#else
     TTSIM_VERIFY(wait_res, UnsupportedFunctionality, "wait_res=0x%x", wait_res);
     TTSIM_VERIFY(stall_res, UnsupportedFunctionality, "stall_res=0x%x", stall_res);
     wait_res &= ~0xC1F; // never need to wait for ThCon memory requests, Unpack0/1, Pack, FPU, RISCV MMIO, or SFPU
@@ -4667,8 +4660,6 @@ TENSIX_EXECUTE_STALLWAIT() {
         wait_res &= ~0x100;
     }
     TTSIM_VERIFY(!wait_res, UnimplementedFunctionality, "wait_res=0x%x", wait_res);
-#else
-#error unknown TT_ARCH_VERSION
 #endif
     return true;
 }

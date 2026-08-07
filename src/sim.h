@@ -311,7 +311,6 @@ struct TensixState {
     uint32_t load_macro_instruction_template[4];
     uint32_t load_macro_sequence[4];
     uint32_t load_macro_misc;
-    bool dst_32bit_addr_en;
     bool cc_en;
     uint32_t cc;
     bool cc_en_stack[CC_STACK_SIZE];

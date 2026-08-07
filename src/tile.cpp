@@ -137,6 +137,11 @@ static constexpr EthLink ETH_PEER_TABLE[] = {
 #else
 #if NUM_CHIPS == 2
     {0, 2, 1, 9}, {0, 3, 1, 8}, {1, 9, 0, 2}, {1, 8, 0, 3},
+#elif NUM_CHIPS == 4
+    {0, 2, 3, 5}, {3, 5, 0, 2}, {0, 4, 3, 4}, {3, 4, 0, 4},
+    {0, 8, 1, 3}, {1, 3, 0, 8}, {0, 9, 1, 2}, {1, 2, 0, 9},
+    {1, 4, 2, 4}, {2, 4, 1, 4}, {1, 5, 2, 2}, {2, 2, 1, 5},
+    {2, 8, 3, 3}, {3, 3, 2, 8}, {2, 9, 3, 2}, {3, 2, 2, 9},
 #elif NUM_CHIPS == 32
     {0, 2, 2, 4}, {0, 3, 2, 5}, {0, 4, 14, 2}, {0, 5, 14, 3}, {0, 6, 21, 0}, {0, 7, 21, 1},
     {1, 2, 20, 4}, {1, 3, 20, 5}, {1, 4, 30, 4}, {1, 5, 30, 5}, {1, 6, 9, 0}, {1, 7, 9, 1},
@@ -263,16 +268,6 @@ void e_tile_init(uint32_t tile_id) {
 #define LEGACY_TELEM_FW_BUNDLE_VERSION 49
 #define FLASH_BUNDLE_VERSION 0x12040000 // v18.4
 #define ETH_LIVE_STATUS_MASK 0xFFFF     // all 16 eth tiles live
-#if NUM_CHIPS == 1
-#define BOARD_ID_HIGH 0x180 // N150 board id
-#define BOARD_ID_LOW 0x1
-#elif NUM_CHIPS == 32
-#define BOARD_ID_HIGH 0x350
-#define BOARD_ID_LOW 0x1
-#else
-#define BOARD_ID_HIGH 0x01000146 // N300 board id
-#define BOARD_ID_LOW 0x118320AE
-#endif
 #elif TT_ARCH_VERSION == 1
 #define FLASH_BUNDLE_VERSION 0x12050000 // v18.5
 #define ETH_LIVE_STATUS_MASK 0x0FFF     // eth tiles 12,13 harvested
@@ -282,24 +277,59 @@ void e_tile_init(uint32_t tile_id) {
 #define ARC_MSG_QUEUE_NUM_ENTRIES 8
 #define ARC_MSG_QUEUE_HEADER_SIZE 32
 #define ARC_MSG_ENTRY_SIZE 32
-#if NUM_CHIPS == 1
-#define BOARD_ID_HIGH 0x400 // P150
-#elif NUM_CHIPS == 2
-#define BOARD_ID_HIGH 0x440 // P300
-#elif NUM_CHIPS == 32
-#define BOARD_ID_HIGH 0x470 // UBB Blackhole
 #endif
-#define BOARD_ID_LOW 0x1
+
+static uint64_t board_id(uint32_t chip_id) {
+#if TT_ARCH_VERSION == 0
+#if NUM_CHIPS == 1
+    return (uint64_t(0x180) << 32) | 1; // N150
+#elif NUM_CHIPS == 32
+    return (uint64_t(0x350) << 32) | 1; // WH Galaxy
+#else
+    constexpr uint64_t N300_BOARD_ID = uint64_t(0x01000146) << 32 | 0x118320AE;
+    uint32_t serial_offset = (NUM_CHIPS > NUM_MMIO_CHIPS) ? chip_id % NUM_MMIO_CHIPS : 0;
+    return N300_BOARD_ID + serial_offset;
+#endif
+#else
+#if NUM_CHIPS == 1
+    return (uint64_t(0x400) << 32) | 1; // P150
+#elif NUM_CHIPS == 4
+    return ((uint64_t(0x440) << 32) | 1) + (chip_id / 2); // QuietBox 2: two P300 cards
+#elif NUM_CHIPS == 32
+    return (uint64_t(0x470) << 32) | 1; // BH Galaxy
+#else
+    return (uint64_t(0x440) << 32) | 1; // P300
+#endif
+#endif
+}
+
+static uint32_t asic_location(uint32_t chip_id) {
+#if TT_ARCH_VERSION == 0
+    return chip_id;
+#else
+#if NUM_CHIPS == 4
+    return 1 - (chip_id & 1);
+#else
+    return chip_id;
+#endif
+#endif
+}
+
+#if TT_ARCH_VERSION == 1
+static uint32_t pcie_usage(uint32_t chip_id) {
+#if NUM_CHIPS <= 4
+    return asic_location(chip_id) ? 4 : 1; // the P300's loc-1 ASIC owns the x4 link
+#else
+    return (chip_id & 1) ? 4 : 1;
+#endif
+}
 #endif
 
 #if TT_ARCH_VERSION == 0
-static uint32_t chip_board_serial(uint32_t chip_id) {
-    return BOARD_ID_LOW + ((NUM_CHIPS > NUM_MMIO_CHIPS) ? (chip_id % NUM_MMIO_CHIPS) : 0);
-}
 #if NUM_CHIPS > 1
 static uint32_t wh_mangled_board_id(uint32_t chip_id) {
-    uint64_t full = (uint64_t(BOARD_ID_HIGH) << 32) | chip_board_serial(chip_id);
-    return ((full >> 4) & 0xF0000000) | (full & 0x0FFFFFFF);
+    uint64_t id = board_id(chip_id);
+    return ((id >> 4) & 0xF0000000) | (id & 0x0FFFFFFF);
 }
 
 static constexpr uint32_t WH_X2_LEGACY_REMOTE_QUEUE_BASE = 0x11080;
@@ -594,19 +624,21 @@ static void bh_eth_link_init(uint32_t tile_id) {
         mem_wr<uint32_t>(&p_tile->sram[0x7CC08], 2); // eth_status.train_status = LINK_TRAIN_PASS
         mem_wr<uint32_t>(&p_tile->sram[0x7CE04], 1); // eth_live_status.rx_link_up = 1
         constexpr uint32_t LOCAL = 0x7CFC0, REMOTE = 0x7CFE0;
-        mem_wr<uint8_t>(&p_tile->sram[LOCAL + 1], uint8_t(g_current_chip_id)); // asic_location
+        uint64_t local_board_id = board_id(g_current_chip_id);
+        uint64_t remote_board_id = board_id(remote_chip);
+        mem_wr<uint8_t>(&p_tile->sram[LOCAL + 1], uint8_t(asic_location(g_current_chip_id))); // asic_location
         mem_wr<uint8_t>(&p_tile->sram[LOCAL + 2], uint8_t(tile_id)); // eth_id
-        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 4], BOARD_ID_HIGH); // board_id_hi
-        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 8], BOARD_ID_LOW); // board_id_lo
-        mem_wr<uint8_t>(&p_tile->sram[REMOTE + 1], uint8_t(remote_chip)); // asic_location
+        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 4], uint32_t(local_board_id >> 32)); // board_id_hi
+        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 8], uint32_t(local_board_id)); // board_id_lo
+        mem_wr<uint8_t>(&p_tile->sram[REMOTE + 1], uint8_t(asic_location(remote_chip))); // asic_location
         mem_wr<uint32_t>(&p_tile->sram[LOCAL + 20], 0); // asic_id_hi
         mem_wr<uint32_t>(&p_tile->sram[LOCAL + 24], 1 + g_current_chip_id); // asic_id_lo
         mem_wr<uint32_t>(&p_tile->sram[REMOTE + 20], 0); // asic_id_hi
         mem_wr<uint32_t>(&p_tile->sram[REMOTE + 24], 1 + remote_chip); // asic_id_lo
         mem_wr<uint8_t>(&p_tile->sram[REMOTE + 2], uint8_t(remote_eth)); // eth_id (remote channel)
         mem_wr<uint8_t>(&p_tile->sram[REMOTE + 3], uint8_t(remote_eth)); // logical_eth_id
-        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 4], BOARD_ID_HIGH); // board_id_hi
-        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 8], BOARD_ID_LOW); // board_id_lo
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 4], uint32_t(remote_board_id >> 32)); // board_id_hi
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 8], uint32_t(remote_board_id)); // board_id_lo
         p_tile->soft_reset_0 &= ~0x800u;
     } else {
         mem_wr<uint32_t>(&p_tile->sram[0x7CC04], 2); // eth_status.port_status = PORT_DOWN (no link)
@@ -639,20 +671,17 @@ void a_tile_init() {
 
     // Not static: the table captures g_current_chip_id (ASIC_ID / ASIC_LOCATION below), so
     // it must be rebuilt for each chip rather than frozen at the first chip's a_tile_init.
-    uint32_t board_id_low = BOARD_ID_LOW;
-#if TT_ARCH_VERSION == 0
-    board_id_low = chip_board_serial(g_current_chip_id); // per-card serial so UMD groups n300 cards correctly
-#endif
-
+    uint64_t chip_board_id = board_id(g_current_chip_id);
+    uint32_t chip_asic_location = asic_location(g_current_chip_id);
 #if TT_ARCH_VERSION == 1
-    uint32_t pcie_usage = (g_current_chip_id & 1) ? 4 : 1;
+    uint32_t chip_pcie_usage = pcie_usage(g_current_chip_id);
 #endif
     const struct {
         uint16_t tag;
         uint32_t value;
     } telem[] = {
-        {1, BOARD_ID_HIGH},
-        {2, board_id_low},
+        {1, uint32_t(chip_board_id >> 32)},
+        {2, uint32_t(chip_board_id)},
         {3, 1 + g_current_chip_id},     // ASIC_ID
         {4, 0x0},                       // HARVESTING_STATE
         {11, 40u << 16},                // ASIC_TEMPERATURE: 40 C
@@ -664,9 +693,9 @@ void a_tile_init() {
         {22, GDDR_STATUS_TRAINED},      // GDDR_STATUS: all channels trained (2 bits/channel, 0b01)
         {28, FLASH_BUNDLE_VERSION},
         {32, 1},                        // TIMER_HEARTBEAT
-        {52, g_current_chip_id},        // ASIC_LOCATION
+        {52, chip_asic_location},       // ASIC_LOCATION
 #if TT_ARCH_VERSION == 1
-        {38, pcie_usage},               // PCIE_USAGE
+        {38, chip_pcie_usage},          // PCIE_USAGE
         {35, 0x0FFF},                   // ENABLED_ETH: harvest the top 2 eth channels (12,13)
         {61, 0x0},                      // ASIC_ID_HIGH
         {62, 1 + g_current_chip_id},    // ASIC_ID_LOW
@@ -1037,7 +1066,13 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
                 TTSIM_VERIFY(row < DST_ROWS, UnsupportedFunctionality, "DBG_ARRAY_RD_CMD: row=%d", row);
                 TTSIM_VERIFY(sel < 8, UnsupportedFunctionality, "DBG_ARRAY_RD_CMD: sel=%d", sel);
                 TTSIM_VERIFY(upper == 2, MissingSpecification, "DBG_ARRAY_RD_CMD: upper=0x%x", upper);
-                return p_tile->tensix[0].dst[row][2*sel] | (uint32_t(p_tile->tensix[0].dst[row][2*sel+1]) << 16);
+                // Note: BH does not appear to apply this condition in most cases, though in some cases
+                // it will pick up carried state from a previous packer instruction (not modeled here)
+                if ((TT_ARCH_VERSION == 1) || p_tile->tensix[0].dst_row_valid[row]) {
+                    return p_tile->tensix[0].dst[row][2*sel] | (uint32_t(p_tile->tensix[0].dst[row][2*sel+1]) << 16);
+                } else {
+                    return 0;
+                }
             }
             TTSIM_ERROR(UnsupportedFunctionality, "DBG_ARRAY_RD_DATA in eth tile");
         case RISCV_DEBUG_REGS_DBG_RD_DATA:
@@ -1048,7 +1083,7 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
         case RISCV_DEBUG_REGS_DBG_INSTRN_BUF_STATUS: TTSIM_ERROR(UnimplementedFunctionality, "DBG_INSTRN_BUF_STATUS");
         case RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE:
             if constexpr (tile_type == 'T') {
-                return p_tile->tensix[0].dst_32bit_addr_en ? 0x800 : 0;
+                return 0;
             }
             TTSIM_ERROR(UnsupportedFunctionality, "DBG_FEATURE_DISABLE in eth tile");
         case RISCV_DEBUG_REGS_TENSIX_CREG_RDDATA:
@@ -1109,7 +1144,6 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
             break;
         case RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE:
             TTSIM_VERIFY(!data, UnsupportedFunctionality, "DBG_FEATURE_DISABLE=0x%x", data);
-            p_tile->tensix[0].dst_32bit_addr_en = false;
             break;
         case RISCV_DEBUG_REGS_SOFT_RESET_0: {
             data &= 0x7FFFFFFF; // ignore bit 31 written by UMD
@@ -2536,6 +2570,9 @@ static void arc_service_message(uint8_t code, uint32_t *resp) {
         case 0xBC: // UPDATE_M3_AUTO_RESET_TIMEOUT
         case 0xBA: // DEASSERT_RISCV_RESET
         case 0xC1: // SET_WDT_TIMEOUT
+#if TT_ARCH_VERSION == 1
+        case 0xC7: // TT_PCIE_LOG
+#endif
             break; // does not modify modeled subsystems
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "arc message code=0x%x", code);

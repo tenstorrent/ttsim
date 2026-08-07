@@ -50,7 +50,7 @@ extern void eth_call_kernel(uint32_t entry, uint32_t gp, uint32_t sp);
 
 // Cooperative-yield pointer an active-erisc app calls periodically to let the base fw run its
 // housekeeping (CallingIntoCustomerCode.md). We point it at eth_yield_entry (the ABI-preserving shim
-// in crt0.S, which calls eth_service) so routing keeps running while metal's app holds the core.
+// in crt0.S, which calls eth_yield_service) so routing keeps running while metal's app holds the core.
 #define ETH_APP_YIELD_PTR_ADDR 0x9020
 extern void eth_yield_entry(void);
 
@@ -685,6 +685,27 @@ static void noc_init(void) {
     }
 }
 
+// The base fw and app share NOC0 command buffer 0. Preserve the app's state while servicing a
+// cooperative yield so a resumed stateful NOC operation sees exactly the registers it left behind.
+// Non-static: referenced by the crt0 yield shim.
+void eth_yield_service(void) {
+    uint32_t targ_lo = PHYS_RD32(NOC0_REGS_BASE + NOC_TARG_ADDR_LO);
+    uint32_t targ_mid = PHYS_RD32(NOC0_REGS_BASE + NOC_TARG_ADDR_MID);
+    uint32_t ret_lo = PHYS_RD32(NOC0_REGS_BASE + NOC_RET_ADDR_LO);
+    uint32_t ret_mid = PHYS_RD32(NOC0_REGS_BASE + NOC_RET_ADDR_MID);
+    uint32_t ctrl = PHYS_RD32(NOC0_REGS_BASE + NOC_CTRL);
+    uint32_t at_len_be = PHYS_RD32(NOC0_REGS_BASE + NOC_AT_LEN_BE);
+
+    eth_service();
+
+    PHYS_WR32(NOC0_REGS_BASE + NOC_TARG_ADDR_LO, targ_lo);
+    PHYS_WR32(NOC0_REGS_BASE + NOC_TARG_ADDR_MID, targ_mid);
+    PHYS_WR32(NOC0_REGS_BASE + NOC_RET_ADDR_LO, ret_lo);
+    PHYS_WR32(NOC0_REGS_BASE + NOC_RET_ADDR_MID, ret_mid);
+    PHYS_WR32(NOC0_REGS_BASE + NOC_CTRL, ctrl);
+    PHYS_WR32(NOC0_REGS_BASE + NOC_AT_LEN_BE, at_len_be);
+}
+
 // Handle a RUN_MSG_GO by launching the enabled processor's kernel, mirroring the active/idle-erisc
 // base FW: read launch[launch_msg_rd_ptr], resolve the kernel entry, and call it. The kernel runs
 // cooperatively -- it yields back through ETH_APP_YIELD_PTR_ADDR so routing continues -- and returns
@@ -710,6 +731,7 @@ static void eth_launch_kernel(void) {
             ((volatile uint8_t *)MY_Y_ADDR)[n] = (id >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
         }
 
+        noc_init();
         eth_call_kernel(entry, KERNEL_GP, KERNEL_STACK_TOP);
     }
 

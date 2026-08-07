@@ -14,7 +14,7 @@ loop:
 // Call a launched kernel with the erisc kernel ABI in place: a0 = entry, a1 = gp
 // (__global_pointer$), a2 = sp (stack top). The base fw runs with its own gp/sp, so save them and
 // restore on return. s0/s1 hold the fw's sp/gp across the call -- the kernel preserves callee-saved
-// registers per the RISC-V ABI (and yields back through eth_service, which does not depend on gp).
+// registers per the RISC-V ABI (and yields back through eth_yield_service, which does not depend on gp).
 .section .text, "ax"
 .global eth_call_kernel
 eth_call_kernel:
@@ -59,7 +59,7 @@ eth_yield_entry:
     sw   a5, 52(sp)
     sw   a6, 56(sp)
     sw   a7, 60(sp)
-    call eth_service
+    call eth_yield_service
     lw   ra, 0(sp)
     lw   t0, 4(sp)
     lw   t1, 8(sp)

@@ -1058,7 +1058,8 @@ static void RV_XLEN_PREFIX(fence)(RiscvHartState *p_hart, uint32_t inst) {
     }
 #endif
 #if XLEN == 64
-    if ((fence_mode == 0x023) || (fence_mode == 0x031) || (fence_mode == 0x033) || (fence_mode == 0x0FF)) {
+    if ((fence_mode == 0x011) || (fence_mode == 0x023) || (fence_mode == 0x031) || (fence_mode == 0x033) ||
+        (fence_mode == 0x0FF)) {
         return; // XXX cases seen so far
     }
 #endif
