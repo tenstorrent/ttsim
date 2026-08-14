@@ -159,11 +159,7 @@ extern "C" API_EXPORT void libttsim_init() {
     if (char *s = getenv("TTSIM_SEMIHOSTING")) {
         TTSIM_VERIFY(!strcmp(s, "1"), ConfigurationError, "TTSIM_SEMIHOSTING must be set to 1");
         s_ttsim_semihosting = true;
-    }
-    if (char *s = getenv("TTSIM_ETH_FW_ROUTING")) {
-        TTSIM_VERIFY(TT_ARCH_VERSION == 0, ConfigurationError, "TTSIM_ETH_FW_ROUTING is only valid for WH");
-        TTSIM_VERIFY(!strcmp(s, "0"), ConfigurationError, "TTSIM_ETH_FW_ROUTING must be set to 0");
-        g_eth_fw_routing = false;
+        ttsim_printf("WARNING: TTSIM_SEMIHOSTING is deprecated and will be removed in a future simulator release\n");
     }
     ttsim_init();
     for (uint32_t d = 0; d < NUM_MMIO_CHIPS; d++) {
@@ -303,8 +299,8 @@ static TlbTarget tlb_translate(uint32_t offset, uint32_t size) {
         TTSIM_VERIFY(!(tlb_cfg & 0x00FFF000), UnsupportedFunctionality,
             "x_start/y_start set without mcast: tlb_cfg=0x%llx", tlb_cfg);
     }
-    uint32_t coord = remap_virtual_coordinate(0, tlb_cfg & 0xFFF);
-    uint32_t coord_start = mcast ? remap_virtual_coordinate(0, (tlb_cfg >> 12) & 0xFFF) : 0;
+    uint32_t coord = remap_virtual_coordinate(&g_p_tile.base, 0, tlb_cfg & 0xFFF);
+    uint32_t coord_start = mcast ? remap_virtual_coordinate(&g_p_tile.base, 0, (tlb_cfg >> 12) & 0xFFF) : 0;
     return {coord, coord_start, addr, mcast};
 #elif TT_ARCH_VERSION == 1
     uint32_t tlb_index = offset / 0x200000;
@@ -320,12 +316,12 @@ static TlbTarget tlb_translate(uint32_t offset, uint32_t size) {
     uint64_t addr_bits = tlb_cfg0 | (uint64_t(tlb_cfg1 & 0x7FF) << 32);
     uint64_t addr = (uint64_t(addr_bits) << 21) | offset;
     bool mcast = bits<5,5>(tlb_cfg2);
-    uint32_t coord = remap_virtual_coordinate(0, bits<22,11>(tlb_cfg1)); // (x_end, y_end)
+    uint32_t coord = remap_virtual_coordinate(&g_p_tile.base, 0, bits<22,11>(tlb_cfg1)); // (x_end, y_end)
     uint32_t coord_start = 0;
     if (mcast) {
         uint32_t x_start = bits<28,23>(tlb_cfg1);
         uint32_t y_start = bits<31,29>(tlb_cfg1) | (bits<2,0>(tlb_cfg2) << 3);
-        coord_start = remap_virtual_coordinate(0, x_start | (y_start << 6));
+        coord_start = remap_virtual_coordinate(&g_p_tile.base, 0, x_start | (y_start << 6));
     } else {
         TTSIM_VERIFY(!(tlb_cfg1 & 0xFF800000) && !(tlb_cfg2 & 0x7), UnsupportedFunctionality,
             "x_start/y_start set without mcast: tlb_cfg1=0x%x tlb_cfg2=0x%x", tlb_cfg1, tlb_cfg2);
@@ -349,7 +345,7 @@ static std::pair<uint32_t, uint64_t> tlb_translate_bar4(uint64_t offset, uint32_
     TTSIM_VERIFY(!tlb_cfg2, UnimplementedFunctionality, "tlb_cfg2=0x%x", tlb_cfg2);
     uint64_t addr = (uint64_t(tlb_cfg0) << 32) | window_offset;
     uint32_t coord = bits<11,0>(tlb_cfg1);
-    coord = remap_virtual_coordinate(0, coord);
+    coord = remap_virtual_coordinate(&g_p_tile.base, 0, coord);
     return {coord, addr};
 }
 #endif
@@ -374,13 +370,7 @@ static void tlb_window_write(uint32_t offset, const void *p, uint32_t size) {
             }
         }
     } else {
-#if NUM_CHIPS > 1
-        if (!wh_x2_legacy_remote_queue_host_wr(target.coord, target.addr, p, size)) {
-            tile_wr_bytes(target.coord, target.addr, p, size);
-        }
-#else
         tile_wr_bytes(target.coord, target.addr, p, size);
-#endif
     }
 }
 
@@ -395,13 +385,7 @@ static void tlb_window_read(uint32_t offset, void *p, uint32_t size) {
         return;
     }
 #endif
-#if NUM_CHIPS > 1
-    if (!wh_x2_legacy_remote_queue_host_rd(target.coord, target.addr, p, size)) {
-        tile_rd_bytes(target.coord, target.addr, p, size);
-    }
-#else
     tile_rd_bytes(target.coord, target.addr, p, size);
-#endif
 }
 
 static uint32_t *dma_reg_ptr(uint32_t offset) {
@@ -776,14 +760,14 @@ static void clock_current_chip() {
         TensixTile *p_tile = &g_t_tiles[tile_id];
         // Hack: for simulator perf, we clock a tile repeatedly as long as it successfully executes at least one Tensix instruction
         for (;;) {
-            for (uint32_t rv32_mask = p_tile->rv32_cores_active; rv32_mask; rv32_mask &= rv32_mask-1) {
+            for (uint32_t rv32_mask = p_tile->rv32_cores_active; rv32_mask; rv32_mask &= rv32_mask - 1) {
                 uint32_t rv32_index = __builtin_ctz(rv32_mask);
                 rv32_step(&p_tile->rv32[rv32_index]);
             }
             [[maybe_unused]] bool any_tensix = false;
             for (uint32_t tensix_id = 0; tensix_id < std::size(p_tile->tensix); tensix_id++) {
                 TensixState *p_tensix = &p_tile->tensix[tensix_id];
-                for (uint32_t pipe_mask = p_tensix->inst_pipes_active; pipe_mask; pipe_mask &= pipe_mask-1) {
+                for (uint32_t pipe_mask = p_tensix->inst_pipes_active; pipe_mask; pipe_mask &= pipe_mask - 1) {
                     uint32_t pipe = __builtin_ctz(pipe_mask);
                     uint32_t inst_rd_ptr = p_tensix->inst_rd_ptr[pipe];
                     if (inst_rd_ptr != p_tensix->inst_wr_ptr[pipe]) {
@@ -804,7 +788,7 @@ static void clock_current_chip() {
             }
         }
     }
-    for (uint64_t rv32_mask = g_rv32_cores_active; rv32_mask; rv32_mask &= rv32_mask-1) {
+    for (uint64_t rv32_mask = g_rv32_cores_active; rv32_mask; rv32_mask &= rv32_mask - 1) {
         uint32_t core_index = __builtin_ctzll(rv32_mask);
         uint32_t tile_id = core_index / RV32_CORES_PER_E_TILE;
         uint32_t rv32_index = core_index % RV32_CORES_PER_E_TILE;

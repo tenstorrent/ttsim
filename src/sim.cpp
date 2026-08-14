@@ -9,7 +9,6 @@
 uint32_t g_current_chip_id;
 uint64_t g_clock;
 ChipState g_chips[NUM_CHIPS];
-bool g_eth_fw_routing = true;
 
 uint64_t ttsim_get_clock() {
     return g_clock;
@@ -18,6 +17,7 @@ uint64_t ttsim_get_clock() {
 void ttsim_init() {
     for (uint32_t chip_id = 0; chip_id < NUM_CHIPS; chip_id++) {
         ttsim_select_chip(chip_id);
+        p_tile_init();
         for (uint32_t tile_id = 0; tile_id < std::size(g_t_tiles); tile_id++) {
             t_tile_init(tile_id);
         }

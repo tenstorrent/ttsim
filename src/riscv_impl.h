@@ -322,7 +322,7 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu_imm)(RiscvHartState *p_
         case 0: value = src + imm; break; // ADDI
         case 1:
             switch (imm) {
-                case 0 ... XLEN-1: value = src << imm; break; // SLLI
+                case 0 ... XLEN - 1: value = src << imm; break; // SLLI
 #if HAS_ZBA_ZBB
                 case 0x600: // CLZ
 #if XLEN == 32
@@ -349,9 +349,9 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu_imm)(RiscvHartState *p_
                 case 0x605: value = int_xlen_t(int16_t(uint16_t(src))); break; // SEXT.H
 #endif
 #if HAS_ZBS
-                case 0x280 ... 0x280 + XLEN-1: value = src | (uint_xlen_t(1) << (imm & (XLEN - 1))); break; // BSETI
-                case 0x480 ... 0x480 + XLEN-1: value = src & ~(uint_xlen_t(1) << (imm & (XLEN - 1))); break; // BCLRI
-                case 0x680 ... 0x680 + XLEN-1: value = src ^ (uint_xlen_t(1) << (imm & (XLEN - 1))); break; // BINVI
+                case 0x280 ... 0x280 + XLEN - 1: value = src | (uint_xlen_t(1) << (imm & (XLEN - 1))); break; // BSETI
+                case 0x480 ... 0x480 + XLEN - 1: value = src & ~(uint_xlen_t(1) << (imm & (XLEN - 1))); break; // BCLRI
+                case 0x680 ... 0x680 + XLEN - 1: value = src ^ (uint_xlen_t(1) << (imm & (XLEN - 1))); break; // BINVI
 #endif
 #if !TTSIM_RV64_SYSTEM
                 default: TTSIM_ERROR(UndefinedBehavior, "funct3=%d imm=0x%x", funct3, imm);
@@ -365,11 +365,11 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu_imm)(RiscvHartState *p_
         case 4: value = src ^ imm; break; // XORI
         case 5:
             switch (imm) {
-                case 0 ... XLEN-1: value = src >> imm; break; // SRLI
-                case 0x400 ... 0x400 + XLEN-1: value = uint_xlen_t(int_xlen_t(src) >> (imm & (XLEN-1))); break; // SRAI
+                case 0 ... XLEN - 1: value = src >> imm; break; // SRLI
+                case 0x400 ... 0x400 + XLEN - 1: value = uint_xlen_t(int_xlen_t(src) >> (imm & (XLEN - 1))); break; // SRAI
 #if HAS_ZBA_ZBB
                 case 0x287: value = orc_b(src); break; // ORC.B
-                case 0x600 ... 0x600 + XLEN-1: value = std::rotr(src, imm); break; // RORI
+                case 0x600 ... 0x600 + XLEN - 1: value = std::rotr(src, imm); break; // RORI
 #if XLEN == 32
                 case 0x698: value = __builtin_bswap32(src); break; // REV8
 #else
@@ -380,7 +380,7 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu_imm)(RiscvHartState *p_
                 case 0x687: value = brev8(src); break;
 #endif
 #if HAS_ZBS
-                case 0x480 ... 0x480 + XLEN-1: value = (src >> (imm & (XLEN - 1))) & 1; break; // BEXTI
+                case 0x480 ... 0x480 + XLEN - 1: value = (src >> (imm & (XLEN - 1))) & 1; break; // BEXTI
 #endif
 #if TT_ARCH_VERSION == 1
                 case 0x680 ... 0x686: case 0x688 ... 0x697: case 0x699 ... 0x69F: TTSIM_ERROR(UnsupportedFunctionality, "GREVI was removed from final Bitmanip spec");
@@ -1172,7 +1172,7 @@ static void write_csr(RiscvHartState *p_hart, uint32_t csr, uint_xlen_t data) {
 #if TT_ARCH_VERSION == 1
             TTSIM_VERIFY(!(data & ~0x104000A), UnsupportedFunctionality, "chicken_bits: data=0x%x", data);
 #else
-            TTSIM_VERIFY(!(data & ~0x40001), UnimplementedFunctionality, "chicken_bits: data=0x%x", data);
+            TTSIM_VERIFY(!(data & ~0x40009), UnimplementedFunctionality, "chicken_bits: data=0x%x", data);
 #endif
             p_hart->chicken_bits = data;
             break;

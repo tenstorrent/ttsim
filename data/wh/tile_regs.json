@@ -882,55 +882,55 @@
         },
         {
           "offset": "0x118",
-          "rw": "ro",
-          "reset_value": null,
+          "rw": "rw",
+          "reset_value": "0x00000000",
           "name": "noc_x_id_translate_table_0"
         },
         {
           "offset": "0x11C",
-          "rw": "ro",
-          "reset_value": null,
+          "rw": "rw",
+          "reset_value": "0x00000000",
           "name": "noc_x_id_translate_table_1"
         },
         {
           "offset": "0x120",
-          "rw": "ro",
-          "reset_value": null,
+          "rw": "rw",
+          "reset_value": "0x00000000",
           "name": "noc_x_id_translate_table_2"
         },
         {
           "offset": "0x124",
-          "rw": "ro",
-          "reset_value": null,
+          "rw": "rw",
+          "reset_value": "0x00000000",
           "name": "noc_x_id_translate_table_3"
         },
         {
           "offset": "0x128",
-          "rw": "ro",
-          "reset_value": null,
+          "rw": "rw",
+          "reset_value": "0x00000000",
           "name": "noc_y_id_translate_table_0"
         },
         {
           "offset": "0x12C",
-          "rw": "ro",
-          "reset_value": null,
+          "rw": "rw",
+          "reset_value": "0x00000000",
           "name": "noc_y_id_translate_table_1"
         },
         {
           "offset": "0x130",
-          "rw": "ro",
-          "reset_value": null,
+          "rw": "rw",
+          "reset_value": "0x00000000",
           "name": "noc_y_id_translate_table_2"
         },
         {
           "offset": "0x134",
-          "rw": "ro",
-          "reset_value": null,
+          "rw": "rw",
+          "reset_value": "0x00000000",
           "name": "noc_y_id_translate_table_3"
         },
         {
           "offset": "0x138",
-          "rw": "ro",
+          "rw": "rw",
           "reset_value": null,
           "name": "noc_id_logical"
         },
@@ -1114,6 +1114,12 @@
           "rw": "rw",
           "reset_value": "0x00000000",
           "name": "erisc_iram_load"
+        },
+        {
+          "offset": "0x9C",
+          "rw": "rw",
+          "reset_value": "0x00000000",
+          "name": "ierisc_reset_pc"
         }
       ]
     },

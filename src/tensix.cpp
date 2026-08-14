@@ -440,15 +440,18 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
         CFG_REG_BANKED_WR(86)
         CFG_REG_BANKED_WR(92)
         CFG_REG_BANKED_WR(93)
+        case 98: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(112)
         case 113: p_tensix->config[bank].cfg113 = data; break;
         case 114 ... 115: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
+        case 118: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(119)
         CFG_REG_BANKED_WR(120)
         CFG_REG_BANKED_WR(121)
         case 122 ... 123: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_BANKED_WR(124)
         CFG_REG_BANKED_WR(125)
+        case 146: TTSIM_ERROR(UnsupportedFunctionality, "reg=%d", reg);
         CFG_REG_WR(180)
         CFG_REG_WR(181)
         CFG_REG_WR(182)
@@ -744,8 +747,6 @@ TENSIX_EXECUTE_MOVD2A() {
 
 TENSIX_EXECUTE_MOVD2B() {
     TTSIM_VERIFY(!instr_mod || (instr_mod == 2), UnsupportedFunctionality, "instr_mod=%d", instr_mod);
-    TTSIM_VERIFY(!(dst & 3), UnsupportedFunctionality, "dst=%d", dst);
-    TTSIM_VERIFY(!(src & 3), UnsupportedFunctionality, "src=%d", src);
     uint32_t src_b_bank = p_tensix->src_b_matrix_bank;
 
     uint32_t state_id = get_state_id(p_tensix, pipe);
@@ -766,9 +767,9 @@ TENSIX_EXECUTE_MOVD2B() {
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dst + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
     // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     dst_row &= DST_ROWS-1;
-    TTSIM_VERIFY(!(src_b_row & 3) && (src_b_row < SRC_ROWS), UnsupportedFunctionality, "src_b_row=%d", src_b_row);
-    TTSIM_VERIFY(!(dst_row & 3), UnimplementedFunctionality, "dst_row=%d", dst_row);
     uint32_t n_rows = (instr_mod == 2) ? 4 : 1;
+    TTSIM_VERIFY(!(src_b_row & (n_rows - 1)) && (src_b_row < SRC_ROWS), UnsupportedFunctionality, "src_b_row=%d", src_b_row);
+    TTSIM_VERIFY(!(dst_row & (n_rows - 1)), UnimplementedFunctionality, "dst_row=%d", dst_row);
     for (uint32_t row = 0; row < n_rows; row++) {
         for (uint32_t col = 0; col < ROW_SIZE; col++) {
             uint32_t value;
@@ -1004,9 +1005,8 @@ TENSIX_EXECUTE_MOVB2D() {
 #if TT_ARCH_VERSION == 1
     uint32_t instr_mod = movb2d_instr_mod; // this field was renamed
 #endif
-    TTSIM_VERIFY((instr_mod == 2) || (instr_mod == 3) || (instr_mod == 4) || (instr_mod == 5), UnsupportedFunctionality, "instr_mod=%d", instr_mod);
-    TTSIM_VERIFY(!(dst & 3), UnsupportedFunctionality, "dst=%d", dst);
-    TTSIM_VERIFY(!(src & 3), UnsupportedFunctionality, "src=%d", src);
+    TTSIM_VERIFY((instr_mod == 0) || (instr_mod == 2) || (instr_mod == 3) || (instr_mod == 4) || (instr_mod == 5),
+        UnsupportedFunctionality, "instr_mod=%d", instr_mod);
     uint32_t src_b_bank = p_tensix->src_b_matrix_bank;
     if (!(p_tensix->src_b_valid & (1 << src_b_bank))) {
         return false; // stall until SrcB valid
@@ -1039,7 +1039,7 @@ TENSIX_EXECUTE_MOVB2D() {
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dst + p_tensix->thread[pipe].DEST_TARGET_REG_CFG_MATH_Offset;
     // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     dst_row &= DST_ROWS-1;
-    uint32_t n_rows = (instr_mod & 2) ? 8 : 4;
+    uint32_t n_rows = (instr_mod & 2) ? 8 : (instr_mod & 4) ? 4 : 1;
     TTSIM_VERIFY(!(src_b_row & (n_rows - 1)) && (src_b_row < SRC_ROWS), UnimplementedFunctionality, "invalid src_b_row=%d", src_b_row);
     TTSIM_VERIFY(!(dst_row & (n_rows - 1)), UnimplementedFunctionality, "invalid dst_row=%d", dst_row);
     for (uint32_t row = 0; row < n_rows; row++) {
@@ -2064,17 +2064,19 @@ TENSIX_EXECUTE_PACR() {
 #endif
 
 #if TT_ARCH_VERSION == 0
-#define PACK_VERIFY_THCON0(f) \
-    TTSIM_VERIFY(!p_config->THCON_SEC0_REG1_##f && !p_config->THCON_SEC0_REG8_##f && \
-                 !p_config->THCON_SEC1_REG1_##f && !p_config->THCON_SEC1_REG8_##f, \
+#define PACK_VERIFY_THCON(f, val) \
+    TTSIM_VERIFY((p_config->THCON_SEC0_REG1_##f == val) && (p_config->THCON_SEC0_REG8_##f == val) && \
+                 (p_config->THCON_SEC1_REG1_##f == val) && (p_config->THCON_SEC1_REG8_##f == val), \
         UnsupportedFunctionality, #f)
 #else
-#define PACK_VERIFY_THCON0(f) \
-    TTSIM_VERIFY(!p_config->THCON_SEC0_REG1_##f, UnsupportedFunctionality, #f)
+#define PACK_VERIFY_THCON(f, val) \
+    TTSIM_VERIFY(p_config->THCON_SEC0_REG1_##f == val, UnsupportedFunctionality, #f)
 #endif
+#define PACK_VERIFY_THCON0(f) PACK_VERIFY_THCON(f, 0)
     PACK_VERIFY_THCON0(Row_start_section_size);
     PACK_VERIFY_THCON0(Dis_shared_exp_assembler);
     PACK_VERIFY_THCON0(Enable_out_fifo);
+    PACK_VERIFY_THCON(Disable_zero_compress, 1);
     PACK_VERIFY_THCON0(Add_l1_dest_addr_offset);
     PACK_VERIFY_THCON0(Sub_l1_tile_header_size);
     PACK_VERIFY_THCON0(Source_interface_selection);
@@ -2212,7 +2214,7 @@ TENSIX_EXECUTE_PACR() {
 #endif
         }
         pack_row &= DST_ROWS-1;
-        TTSIM_VERIFY(pack_row + ((count + ROW_SIZE-1) / ROW_SIZE) <= DST_ROWS, UnimplementedFunctionality, "pack_row=%d count=%d", pack_row, count);
+        TTSIM_VERIFY(pack_row + ((count + ROW_SIZE - 1) / ROW_SIZE) <= DST_ROWS, UnimplementedFunctionality, "pack_row=%d count=%d", pack_row, count);
         if (!p_tensix->packer_valid) {
             uint32_t addr = packer_addrs[packer];
             TTSIM_VERIFY(!p_addr_ctrl->ch1_z, UnimplementedFunctionality, "ch1_z=%d", p_addr_ctrl->ch1_z);
@@ -3383,7 +3385,7 @@ TENSIX_EXECUTE_STOREREG() {
 
 template<typename Func>
 static inline void for_each_lane(uint32_t mask, Func f) {
-    for (; mask; mask &= mask-1) {
+    for (; mask; mask &= mask - 1) {
         uint32_t lane = __builtin_ctz(mask);
         f(lane);
     }
@@ -4278,9 +4280,11 @@ TENSIX_EXECUTE_SFPCAST() {
 TENSIX_EXECUTE_SFPCONFIG() {
     TTSIM_VERIFY(instr_mod1 <= 1, UnsupportedFunctionality, "instr_mod1=%d", instr_mod1);
     if (!instr_mod1) { // require all lanes of LReg[0] to be identical to one another
-        for (uint32_t lane = 1; lane < 32; lane++) {
-            TTSIM_VERIFY(p_tensix->l_regs[0][0] == p_tensix->l_regs[0][lane],
-                UnsupportedFunctionality, "instr_mod1=%d: l_regs[0]: lane[%d] mismatch with lane[0]", instr_mod1, lane);
+        if (config_dest != 14) { // ...with exception of cases where this is supported below
+            for (uint32_t lane = 1; lane < 32; lane++) {
+                TTSIM_VERIFY(p_tensix->l_regs[0][0] == p_tensix->l_regs[0][lane],
+                    UnsupportedFunctionality, "config_dest=%d: l_regs[0]: lane[%d] mismatch with lane[0]", config_dest, lane);
+            }
         }
         TTSIM_VERIFY(!imm16_math, UnsupportedFunctionality, "instr_mod1=%d imm16_math=0x%x", instr_mod1, imm16_math);
     }
@@ -4311,7 +4315,7 @@ TENSIX_EXECUTE_SFPCONFIG() {
                 }
             } else {
                 for (uint32_t lane = 0; lane < 32; lane++) {
-                    p_tensix->l_regs[config_dest][lane] = p_tensix->l_regs[0][0];
+                    p_tensix->l_regs[config_dest][lane] = p_tensix->l_regs[0][lane & 7];
                 }
             }
             break;
@@ -4343,8 +4347,8 @@ TENSIX_EXECUTE_SFPSWAP() {
     uint32_t mask = p_tensix->cc_en ? p_tensix->cc : 0xFFFFFFFF;
     uint32_t lane_config = p_tensix->lane_config;
     if (lane_config & 4) {
-        TTSIM_VERIFY(lreg_c < 4, UnsupportedFunctionality, "lreg_c=%d", lreg_c);
-        TTSIM_VERIFY(lreg_dest < 4, UnsupportedFunctionality, "lreg_dest=%d", lreg_dest);
+        TTSIM_VERIFY(lreg_c < 4, UnsupportedFunctionality, "ENABLE_DEST_INDEX: lreg_c=%d", lreg_c);
+        TTSIM_VERIFY(lreg_dest < 4, UnsupportedFunctionality, "ENABLE_DEST_INDEX: lreg_dest=%d", lreg_dest);
     }
     for_each_lane(mask, [=](uint32_t lane) {
         uint32_t c = p_tensix->l_regs[lreg_c][lane];
@@ -4353,10 +4357,9 @@ TENSIX_EXECUTE_SFPSWAP() {
         if (instr_mod1) {
             int32_t c_unpacked = sign_mag32_total_order(c);
             int32_t d_unpacked = sign_mag32_total_order(d);
-            if (vd_gets_min & (1 << lane)) {
-                should_swap = c_unpacked < d_unpacked;
-            } else {
-                should_swap = c_unpacked >= d_unpacked;
+            should_swap = (c_unpacked < d_unpacked) || ((c_unpacked == d_unpacked) && (c_unpacked < 0));
+            if (!(vd_gets_min & (1 << lane))) {
+                should_swap = !should_swap;
             }
             if (lane_config & 0x100) {
                 should_swap = !should_swap;
@@ -4388,14 +4391,20 @@ TENSIX_EXECUTE_SFPLOADMACRO() {
 
 TENSIX_EXECUTE_SFPSHFT2() {
     TTSIM_VERIFY(instr_mod1 <= 6, UndefinedBehavior, "instr_mod1=%d", instr_mod1);
-    TTSIM_VERIFY((instr_mod1 == 3) || (instr_mod1 == 4) || (instr_mod1 == 5), UnsupportedFunctionality, "instr_mod1=%d", instr_mod1);
+    TTSIM_VERIFY(instr_mod1 >= 3, UnsupportedFunctionality, "instr_mod1=%d", instr_mod1); // allow 3..6
 #if TT_ARCH_VERSION == 0
     // XXX Would be good to add a checker for the WH-only scheduling restrictions on some modes
     TTSIM_VERIFY(instr_mod1 != 4, UnsupportedFunctionality, "SUBVEC_SHFLSHR1 should not be used on Wormhole due to a hardware bug");
+#else
+    TTSIM_VERIFY(instr_mod1 != 6, UnsupportedFunctionality, "SHFT_IMM should not be used on Blackhole; use SFPSHFT with ARG_IMM_USE_VC instead");
 #endif
     TTSIM_VERIFY(lreg_dest < 8, UnsupportedFunctionality, "lreg_dest=%d", lreg_dest);
     if (instr_mod1 == 5) { // imm12_math is used as a source register for this mode
         TTSIM_VERIFY(imm12_math < 16, UnsupportedFunctionality, "instr_mod1=%d imm12_math=%d", instr_mod1, imm12_math);
+#if TT_ARCH_VERSION == 0
+    } else if (instr_mod1 == 6) { // imm12_math is used as both a source register and a shift count for this mode
+        TTSIM_VERIFY((imm12_math < 32) || (imm12_math > 0xFE0), UnsupportedFunctionality, "instr_mod1=%d imm12_math=%d", instr_mod1, imm12_math);
+#endif
     } else {
         TTSIM_VERIFY(!imm12_math, UnsupportedFunctionality, "instr_mod1=%d imm12_math=%d", instr_mod1, imm12_math);
     }
@@ -4432,6 +4441,19 @@ TENSIX_EXECUTE_SFPSHFT2() {
                 p_tensix->l_regs[lreg_dest][lane] = src_b;
             });
             break;
+#if TT_ARCH_VERSION == 0
+        case 6:
+            for_each_lane(mask, [=](uint32_t lane) {
+                uint32_t src_b = p_tensix->l_regs[imm12_math & 15][lane];
+                if (!(imm12_math & 0x800)) {
+                    src_b <<= imm12_math & 31;
+                } else {
+                    src_b >>= (-imm12_math) & 31;
+                }
+                p_tensix->l_regs[lreg_dest][lane] = src_b;
+            });
+            break;
+#endif
         default:
             TTSIM_ERROR(AssertionFailure, "instr_mod1=%d", instr_mod1);
     }
@@ -4614,9 +4636,9 @@ TENSIX_EXECUTE_ATRELM() {
 
 // XXX we ignore stall_res and currently block all downstream instructions from issuing, regardless of type
 TENSIX_EXECUTE_STALLWAIT() {
-#if TT_ARCH_VERSION == 0
     TTSIM_VERIFY(wait_res, UnsupportedFunctionality, "wait_res=0x%x", wait_res);
     TTSIM_VERIFY(stall_res, UnsupportedFunctionality, "stall_res=0x%x", stall_res);
+#if TT_ARCH_VERSION == 0
     wait_res &= ~0x60FF; // never need to wait for ThCon memory requests, Unpack0/1, Pack0/1/2/3, FPU, RISCV MMIO, or SFPU
     if (wait_res & 0x100) {
         if (p_tensix->src_a_valid & (1 << p_tensix->src_a_unpack_bank)) {
@@ -4642,11 +4664,8 @@ TENSIX_EXECUTE_STALLWAIT() {
         }
         wait_res &= ~0x800;
     }
-    TTSIM_VERIFY(!wait_res, UnimplementedFunctionality, "wait_res=0x%x", wait_res);
 #else
-    TTSIM_VERIFY(wait_res, UnsupportedFunctionality, "wait_res=0x%x", wait_res);
-    TTSIM_VERIFY(stall_res, UnsupportedFunctionality, "stall_res=0x%x", stall_res);
-    wait_res &= ~0xC1F; // never need to wait for ThCon memory requests, Unpack0/1, Pack, FPU, RISCV MMIO, or SFPU
+    wait_res &= ~0x1C1F; // never need to wait for ThCon memory requests, Unpack0/1, Pack, FPU, RISCV MMIO, SFPU, or Config
     if (wait_res & 0x80) {
         if (!(p_tensix->src_a_valid & (1 << p_tensix->src_a_matrix_bank))) {
             return false; // stall until SrcA valid
@@ -4659,8 +4678,8 @@ TENSIX_EXECUTE_STALLWAIT() {
         }
         wait_res &= ~0x100;
     }
-    TTSIM_VERIFY(!wait_res, UnimplementedFunctionality, "wait_res=0x%x", wait_res);
 #endif
+    TTSIM_VERIFY(!wait_res, UnimplementedFunctionality, "wait_res=0x%x", wait_res);
     return true;
 }
 
@@ -4748,9 +4767,11 @@ TENSIX_EXECUTE_SETC16() {
 #if TT_ARCH_VERSION == 1
         THREAD_CFG_REG_WR(2)
         THREAD_CFG_REG_WR(3)
+        case 4: TTSIM_ERROR(UnsupportedFunctionality, "setc16_reg=%d", setc16_reg);
         THREAD_CFG_REG_WR(5)
         case 6: TTSIM_ERROR(UnsupportedFunctionality, "setc16_reg=%d", setc16_reg);
         THREAD_CFG_REG_WR(7)
+        case 8 ... 10: TTSIM_ERROR(UnsupportedFunctionality, "setc16_reg=%d", setc16_reg);
         THREAD_CFG_REG_WR(12)
         THREAD_CFG_REG_WR(13)
         THREAD_CFG_REG_WR(14)

@@ -141,10 +141,10 @@ extern void eth_yield_entry(void);
 // requests are split into multiple chunks.
 #define ETH_BLOCK_CHUNK 2048u
 #define BLOCK_BUF_ADDR 0x15600 // block payload staged for / landed from the link (holds an ETH_BLOCK_CHUNK)
-#define NOC_BLOCK_STAGE_ADDR 0x15F00 // receiver: block NOC source/dest, alignment-matched to the target
-// Broadcast payload staging. Offset by the 32-byte header so a host-window read keeps (stage & 63) ==
-// (host_src & 63) while the multicast keeps (stage & 15) == (local_addr & 15) == 0. Fits the BLOCK_BUF slot.
-#define BCAST_STAGE_ADDR (BLOCK_BUF_ADDR + BROADCAST_HEADER_SIZE)
+#define NOC_BLOCK_STAGE_ADDR 0x15F00 // receiver: block/broadcast NOC source/dest, alignment-matched to the target
+// A host broadcast payload follows a 32-byte header, so its fixed read/link slot is 32 mod 64. The ERISC
+// that issues a multicast copies the payload to the NOC stage at the destination's mod-16 offset.
+#define BCAST_READ_ADDR (BLOCK_BUF_ADDR + BROADCAST_HEADER_SIZE)
 #define BCAST_CHUNK 2048u
 
 #define ROUTING_FIRMWARE_STATE 0x104C
@@ -168,6 +168,10 @@ extern void eth_yield_entry(void);
 // Ingress landing buffer for a relayed block read. Distinct from BLOCK_BUF because the ingress keeps
 // using BLOCK_BUF for its receiver/egress roles while the relay is in flight, and would clobber it.
 #define RELAY_RESP_BLOCK_ADDR 0x16800
+_Static_assert((BCAST_CHUNK & 63u) == 0, "broadcast chunks must preserve host and destination alignment");
+_Static_assert(BCAST_READ_ADDR + BCAST_CHUNK <= NOC_BLOCK_STAGE_ADDR, "broadcast read and NOC stages overlap");
+_Static_assert(NOC_BLOCK_STAGE_ADDR + 15u + BCAST_CHUNK <= RELAY_RESP_BLOCK_ADDR,
+               "destination-aligned broadcast stage overlaps relay response buffer");
 // Relay request slot (32 bytes). The whole slot lands in one NOC write, so the egress polls RLY_SEQ safely.
 #define RLY_OP 4
 #define RLY_SYS_LO 8
@@ -303,7 +307,11 @@ static uint32_t route_egress(uint32_t tc) {
 }
 
 // Report an unhandled condition to the sim: writing ETH_FW_SIM_ERROR_ADDR aborts the sim with `code`.
-[[noreturn]] static void sim_error(uint32_t code) { PHYS_WR32(ETH_FW_SIM_ERROR_ADDR, code); while(1) {} }
+[[noreturn]] static void sim_error(uint32_t code) {
+    PHYS_WR32(ETH_FW_SIM_ERROR_ADDR, code);
+    while (1) {
+    }
+}
 
 // Intra-chip NOC copy to/from another eth core `coord`'s L1 (src/dst must be alignment-matched per noc_*).
 static void noc_put(uint32_t coord, uint32_t dst, uint32_t src, uint32_t size) { noc_write(dst, coord << 4, src, size); }
@@ -312,11 +320,13 @@ static void noc_get(uint32_t coord, uint32_t src, uint32_t dst, uint32_t size) {
 // Stream the host-DRAM broadcast payload (past its 32-byte header) in chunks, multicasting each to this
 // chip's tensix grid. `tag` is the host-window offset of the block; `sys_lo` the per-tensix L1 dest.
 static void bcast_to_grid(uint32_t sys_lo, uint32_t tag, uint32_t payload) {
+    uint32_t stage = NOC_BLOCK_STAGE_ADDR + (sys_lo & 15u);
     for (uint32_t done = 0; done < payload; done += BCAST_CHUNK) {
         uint32_t chunk = payload - done < BCAST_CHUNK ? payload - done : BCAST_CHUNK;
         uint64_t src = PCIE_HOST_WINDOW_BASE + tag + BROADCAST_HEADER_SIZE + done;
-        noc_read((uint32_t)src, (PCIE_COORD << 4) | (uint32_t)((src >> 32) & 0xF), BCAST_STAGE_ADDR, chunk);
-        noc_multicast(sys_lo + done, TENSIX_GRID_START, TENSIX_GRID_END, BCAST_STAGE_ADDR, chunk);
+        noc_read((uint32_t)src, (PCIE_COORD << 4) | (uint32_t)((src >> 32) & 0xF), BCAST_READ_ADDR, chunk);
+        l1_copy(stage, BCAST_READ_ADDR, chunk);
+        noc_multicast(sys_lo + done, TENSIX_GRID_START, TENSIX_GRID_END, stage, chunk);
     }
 }
 
@@ -326,9 +336,9 @@ static void bcast_to_peer(uint32_t sys_lo, uint32_t tag, uint32_t payload, uint3
     for (uint32_t done = 0; done < payload; done += BCAST_CHUNK) {
         uint32_t chunk = payload - done < BCAST_CHUNK ? payload - done : BCAST_CHUNK;
         uint64_t src = PCIE_HOST_WINDOW_BASE + tag + BROADCAST_HEADER_SIZE + done;
-        noc_read((uint32_t)src, (PCIE_COORD << 4) | (uint32_t)((src >> 32) & 0xF), BCAST_STAGE_ADDR, chunk);
+        noc_read((uint32_t)src, (PCIE_COORD << 4) | (uint32_t)((src >> 32) & 0xF), BCAST_READ_ADDR, chunk);
         uint32_t seq = ++(*send_seq);
-        eth_send(BCAST_STAGE_ADDR, BCAST_STAGE_ADDR, round16(chunk));
+        eth_send(BCAST_READ_ADDR, BCAST_READ_ADDR, round16(chunk));
         PHYS_WR32(OUTBOX_ADDR + PKT_SEQ, seq);
         PHYS_WR32(OUTBOX_ADDR + PKT_OP, OP_BROADCAST);
         PHYS_WR32(OUTBOX_ADDR + PKT_ADDR_LO, sys_lo + done);
@@ -508,8 +518,10 @@ static void service_inbox(uint32_t *last_seq) {
         eth_send(BLOCK_BUF_ADDR, BLOCK_BUF_ADDR, round16(size));
         reply_op = OP_BLOCK_RESP;
     } else if (op == OP_BROADCAST) {
-        // The block preceded this header at BCAST_STAGE; multicast it to this chip's tensix grid.
-        noc_multicast(addr_lo, TENSIX_GRID_START, TENSIX_GRID_END, BCAST_STAGE_ADDR, size);
+        // The block preceded this header at BCAST_READ; realign it before the local multicast.
+        uint32_t stage = NOC_BLOCK_STAGE_ADDR + (addr_lo & 15u);
+        l1_copy(stage, BCAST_READ_ADDR, size);
+        noc_multicast(addr_lo, TENSIX_GRID_START, TENSIX_GRID_END, stage, size);
     }
     *last_seq = seq;
     PHYS_WR32(OUTBOX_ADDR + PKT_SEQ, seq);

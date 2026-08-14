@@ -99,7 +99,7 @@ static inline uint8_t *rv64_dtlb_host(Rv64SysHartState *p_hart, uint64_t vaddr, 
         return nullptr; // crosses a page -- XXX alignment check should be sufficient here to avoid?
     }
     uint64_t vpn = vaddr >> 12;
-    auto *e = is_store ? &p_hart->dtlb_store[vpn & (DTLB_N-1)] : &p_hart->dtlb_load[vpn & (DTLB_N-1)];
+    auto *e = is_store ? &p_hart->dtlb_store[vpn & (DTLB_N - 1)] : &p_hart->dtlb_load[vpn & (DTLB_N - 1)];
     if (e->vpn == vpn) [[likely]] {
         return e->host_page + (uint32_t(vaddr) & 0xFFF);
     }

@@ -890,7 +890,7 @@
  "STALLWAIT": {
   "opcode": 162,
   "args": {
-   "wait_res": "11:0",
+   "wait_res": "12:0",
    "stall_res": "23:15"
   }
  },

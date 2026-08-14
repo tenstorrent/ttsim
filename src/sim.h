@@ -344,7 +344,17 @@ struct TensixState {
 #endif
 };
 
+struct BaseTile {
+    uint32_t niu_cfg_0[NUM_NOCS];
+#if TT_ARCH_VERSION == 0
+    uint32_t noc_translation_x[NUM_NOCS][4];
+    uint32_t noc_translation_y[NUM_NOCS][4];
+    uint32_t noc_id_logical[NUM_NOCS];
+#endif
+};
+
 struct TensixTile {
+    BaseTile base;
     uint32_t rv32_cores_active;
 #if RV64_CORES_PER_T_TILE
     uint32_t rv64_cores_active;
@@ -377,7 +387,6 @@ struct TensixTile {
     uint32_t noc_ctrl[NUM_NOCS][NUM_NOC_CMD_BUFS];
     uint32_t noc_at_len_be[NUM_NOCS][NUM_NOC_CMD_BUFS];
     uint32_t noc_at_data[NUM_NOCS][NUM_NOC_CMD_BUFS];
-    uint32_t niu_cfg_0[NUM_NOCS];
     uint32_t router_cfg_0[NUM_NOCS];
     uint32_t router_cfg_1[NUM_NOCS];
     uint32_t router_cfg_2[NUM_NOCS];
@@ -409,6 +418,7 @@ struct TensixTile {
 };
 
 struct EthTile {
+    BaseTile base;
     uint8_t sram[ETH_SRAM_SIZE];
     Rv32HartState rv32[RV32_CORES_PER_E_TILE];
     uint8_t rv32_local_ram[RV32_CORES_PER_E_TILE][ERISC_LOCAL_MEM_SIZE];
@@ -432,7 +442,6 @@ struct EthTile {
     uint32_t noc_ctrl[NUM_NOCS][NUM_NOC_CMD_BUFS];
     uint32_t noc_at_len_be[NUM_NOCS][NUM_NOC_CMD_BUFS];
     uint32_t noc_at_data[NUM_NOCS][NUM_NOC_CMD_BUFS];
-    uint32_t niu_cfg_0[NUM_NOCS];
     uint32_t router_cfg_0[NUM_NOCS];
     uint32_t router_cfg_1[NUM_NOCS];
     uint32_t router_cfg_2[NUM_NOCS];
@@ -478,6 +487,7 @@ struct EthTile {
 #define ARC_CSM_SIZE (ARC_CSM_LIMIT - ARC_CSM_BASE + 1)
 
 struct ArcTile {
+    BaseTile base;
     uint8_t csm[ARC_CSM_SIZE];
     uint32_t reset_unit_scratch[8];
     uint32_t arc_misc_cntl;
@@ -553,6 +563,7 @@ uint32_t pcie_niu_rd32(uint32_t noc_instance, uint32_t offset);
 #endif
 
 struct PcieTile {
+    BaseTile base;
     uint32_t pci_cfg_command_status;
     uint32_t pci_cfg_cache_latency_header;
     uint32_t pci_cfg_bar0_lo; // XXX These are programmable for BAR sizing, but not relocatable at present
@@ -596,7 +607,6 @@ struct ChipState {
 extern uint32_t g_current_chip_id;
 extern uint64_t g_clock;
 extern ChipState g_chips[NUM_CHIPS];
-extern bool g_eth_fw_routing;
 
 // XXX transitional
 // Single-chip builds index a constant 0 so the hot paths cannot regress; only
@@ -644,8 +654,9 @@ bool tensix_decode_and_execute(TensixState *p_tensix, uint32_t pipe, uint32_t in
 
 void t_tile_init(uint32_t tile_id);
 void e_tile_init(uint32_t tile_id);
+void p_tile_init();
 void a_tile_init();
-uint32_t remap_virtual_coordinate(uint32_t noc_instance, uint32_t coord);
+uint32_t remap_virtual_coordinate(const BaseTile *p_tile, uint32_t noc_instance, uint32_t coord);
 // XXX probably turn these into template functions so we can do 8-bit/16-bit MMIOs as well
 std::pair<bool, uint32_t> tile_mmio_rd32(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_t addr);
 std::pair<bool, uint64_t> tile_mmio_rd64(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_t addr);
@@ -653,8 +664,6 @@ std::pair<bool, uint64_t> tile_mmio_rd64(char tile_type, uint32_t tile_id, uint3
 [[nodiscard]] bool tile_mmio_wr64(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_t addr, uint64_t data);
 void tile_rd_bytes(uint32_t coord, uint64_t addr, void *p, uint32_t size);
 void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size);
-bool wh_x2_legacy_remote_queue_host_rd(uint32_t coord, uint64_t addr, void *p, uint32_t size);
-bool wh_x2_legacy_remote_queue_host_wr(uint32_t coord, uint64_t addr, const void *p, uint32_t size);
 
 template<class T> inline T tile_rd(uint32_t coord, uint64_t addr) {
     T data;
