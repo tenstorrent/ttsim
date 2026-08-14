@@ -5,6 +5,7 @@
 # Repo-wide style checker for tracked source files (line length, whitespace, ASCII, etc.).
 import argparse
 import os
+import re
 
 # Only files that come from external teams/orgs should go in this list
 skip_files = {
@@ -43,6 +44,17 @@ def check_file(path: str) -> None:
                 report_error(path, line_num, 'line does not end with a newline')
             if line.endswith(' '):
                 report_error(path, line_num, 'trailing whitespace found')
+            if path.endswith(('.c', '.cpp', '.h')):
+                if re.fullmatch(r'\s*;\s*(?://.*)?', line):
+                    report_error(path, line_num, 'standalone empty statement')
+                is_preprocessor = line.lstrip().startswith('#') or line.endswith('\\')
+                if not is_preprocessor:
+                    control_block_has_code = bool(re.search(r'\b(?:if|for|while|switch|catch)\s*\(.*\)\s*\{\s*[^}/\s]', line))
+                    control_block_has_code |= bool(re.search(r'\b(?:else|do|try)\s*\{\s*[^}/\s]', line))
+                    if control_block_has_code:
+                        report_error(path, line_num, 'code after opening brace must start on a new line')
+                    if re.search(r'\b(?:if|for|while|switch|catch)\(', line):
+                        report_error(path, line_num, 'control keyword must be followed by a space')
             if not line:
                 if last_line_empty:
                     if line_num == 1:
