@@ -151,6 +151,8 @@ process, with the explicit exception of semihosting (below).
 
 ### Semihosting (deliberate exception)
 
+**NOTE: semihosting is deprecated and will be removed in a future simulator release.**
+
 When `TTSIM_SEMIHOSTING=1`, a program running on the simulated RISC-V cores may make semihosting
 calls that the library services on the host's behalf while inside `libttsim_clock`. This is an
 intentional escape hatch for running bare-metal test programs, and the "well-behaved guest"
