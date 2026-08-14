@@ -21,8 +21,8 @@ Quasar is pre-silicon and ships as a binary only.
   bugs under active debug. Can run many tt-metal, ttnn, tt-forge, and LLK examples/tests.
 
 - **Wormhole/Blackhole multichip**: `wh_x2` (N300), `wh_x8` (T3000/LoudBox), `wh_x32` (WH Galaxy),
-  `bh_x2` (P300), and `bh_x32` (BH Galaxy) configs are available, with significant numbers of
-  Ethernet, multidevice, and fabric tests passing.
+  `bh_x2` (P300), `bh_x4` (two P300 cards), and `bh_x32` (BH Galaxy) configs are available, with
+  significant numbers of Ethernet, multidevice, and fabric tests passing.
 
 - **Quasar**: DM cores and TRISCs can be taken out of reset. RV32/64 code and simple NOC transfers
   work. Some basic Tensix SFPU, packer, and unpacker functionality works. More tests and features
@@ -202,7 +202,7 @@ SFPLOADMACRO is not supported in the SFPU. Set `TT_METAL_DISABLE_SFPLOADMACRO=1`
 
 Multichip support and testing is incomplete. UMD changes for full support are not yet fully merged
 for platforms beyond `wh_x2`, though enablement for additional targets is in progress, and the
-`mcraighead/mc-p300` branch of `tt-metal` was verified against the `wh_x2`, `wh_x8`, `wh_x32`,
+`micah/native-sim` branch of `tt-metal` was verified against the `wh_x2`, `wh_x8`, `wh_x32`,
 `bh_x2`, and `bh_x32` simulator builds. Set the `TT_METAL_MOCK_CLUSTER_DESC_PATH` environment
 variable to point to a valid cluster .yaml (e.g.
 `tt_metal/third_party/umd/tests/cluster_descriptor_examples/wormhole_N300.yaml` or
