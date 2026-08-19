@@ -159,7 +159,7 @@ extern "C" API_EXPORT void libttsim_init() {
     if (char *s = getenv("TTSIM_SEMIHOSTING")) {
         TTSIM_VERIFY(!strcmp(s, "1"), ConfigurationError, "TTSIM_SEMIHOSTING must be set to 1");
         s_ttsim_semihosting = true;
-        ttsim_printf("WARNING: TTSIM_SEMIHOSTING is deprecated and will be removed in a future simulator release\n");
+        TTSIM_ERROR(UnsupportedFunctionality, "TTSIM_SEMIHOSTING is deprecated and unsupported");
     }
     ttsim_init();
     for (uint32_t d = 0; d < NUM_MMIO_CHIPS; d++) {
@@ -355,14 +355,16 @@ static void tlb_window_write(uint32_t offset, const void *p, uint32_t size) {
     if (target.mcast) {
         uint32_t start_x = target.coord_start & 63, end_x = target.coord & 63;
         uint32_t start_y = target.coord_start >> 6, end_y = target.coord >> 6;
+        uint32_t disabled_col_mask = g_p_tile.base.router_cfg_1[0];
+        uint32_t disabled_row_mask = g_p_tile.base.router_cfg_3[0];
         TTSIM_VERIFY((start_x <= end_x) && (start_y <= end_y), UndefinedBehavior,
             "multicast start (%d,%d) past end (%d,%d)", start_x, start_y, end_x, end_y);
-        TTSIM_VERIFY(!((1ull << start_x & NONTENSIX_COL_MASK) || (1ull << start_y & NONTENSIX_ROW_MASK) ||
-                    (1ull << end_x & NONTENSIX_COL_MASK) || (1ull << end_y & NONTENSIX_ROW_MASK)),
-                    UndefinedBehavior, "multicast rectangle not within Tensix grid");
+        TTSIM_VERIFY(!(((1ull << start_x) & NONTENSIX_COL_MASK) || ((1ull << start_y) & NONTENSIX_ROW_MASK) ||
+                       ((1ull << end_x) & NONTENSIX_COL_MASK) || ((1ull << end_y) & NONTENSIX_ROW_MASK)),
+            UndefinedBehavior, "multicast rectangle not within Tensix grid");
         for (uint32_t y = start_y; y <= end_y; y++) {
             for (uint32_t x = start_x; x <= end_x; x++) {
-                if ((1ull << x & NONTENSIX_COL_MASK) || (1ull << y & NONTENSIX_ROW_MASK)) {
+                if ((disabled_col_mask & (1ull << x)) || (disabled_row_mask & (1ull << y))) {
                     continue;
                 }
                 uint32_t coord = x | (y << 6);

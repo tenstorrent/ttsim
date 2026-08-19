@@ -82,6 +82,6 @@ void ttsim_heartbeat() {
     if (mhz >= 10.0f) {
         ttsim_printf("%.1f seconds (%.1f MHz)\n", seconds_elapsed, mhz);
     } else {
-        ttsim_printf("%.1f seconds (%.1f KHz)\n", seconds_elapsed, mhz*1000);
+        ttsim_printf("%.1f seconds (%.1f KHz)\n", seconds_elapsed, mhz * 1000);
     }
 }

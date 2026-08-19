@@ -18,8 +18,12 @@ def main():
     group_sizes = {'thread_cfg': 16, 'cfg': 32}
 
     with open(args.out, 'w') as f:
+        unsupported_fields: list[tuple] = []
         for (group, regs) in all_regs.items():
             reg_size = group_sizes[group]
+            f.write(f'#define FOR_EACH_{group.upper()}_REG(_) \\\n')
+            f.write(' \\\n'.join(f'    _({addr})' for addr in regs))
+            f.write('\n\n')
             for (addr, fields) in regs.items():
                 f.write(f'#define {group.upper()}{addr}_REG_UNION() \\\n')
                 f.write('    union { \\\n')
@@ -31,12 +35,15 @@ def main():
                     assert bit_pos <= shift, (bit_pos, field) # fields should never be out of order
                     if bit_pos < shift:
                         f.write(f'            uint32_t : {shift - bit_pos}; \\\n')
-                    if size == 32:
+                    mask = ((1 << size) - 1) << shift
+                    if field.get('unsupported', False):
+                        unsupported_fields.append((group, addr, name, mask))
+                        f.write(f'            uint32_t : {size}; \\\n')
+                    elif size == 32:
                         f.write(f'            uint32_t {name}; \\\n')
                     else:
                         f.write(f'            uint32_t {name} : {size}; \\\n')
                     bit_pos = shift + size
-                    mask = ((1 << size) - 1) << shift
                     assert not used_bits & mask, (addr, field)
                     used_bits |= mask
                 if bit_pos < reg_size:
@@ -46,6 +53,13 @@ def main():
                 f.write('    };\n')
                 f.write(f'#define {group.upper()}{addr}_REG_MASK 0x{used_bits:X}\n')
                 f.write('\n')
+        f.write('#define CHECK_UNSUPPORTED_CFG_FIELDS(p_config) \\\n')
+        f.write('    do { \\\n')
+        f.write(' \\\n'.join(
+            f'        TTSIM_VERIFY(!((p_config)->{group}{addr} & 0x{mask:X}), UnsupportedFunctionality, "{name}");'
+            for (group, addr, name, mask) in unsupported_fields
+        ))
+        f.write(' \\\n    } while (0)\n')
 
 if __name__ == '__main__':
     main()

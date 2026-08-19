@@ -1841,7 +1841,7 @@ void RV_XLEN_PREFIX(step)(RiscvHartState *p_hart) {
 #if XLEN == 32
     if (pc >= p_hart->sram_size) [[unlikely]]
 #else
-    if (pc > TENSIX_SRAM_SIZE-4) [[unlikely]] // XXX as written, cannot execute a compressed instruction in the last 2B
+    if (pc > TENSIX_SRAM_SIZE - 4) [[unlikely]] // XXX as written, cannot execute a compressed instruction in the last 2B
 #endif
     {
 #if TT_ARCH_VERSION == 0

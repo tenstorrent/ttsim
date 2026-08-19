@@ -239,11 +239,18 @@ static __attribute__((noinline)) uint32_t fp_end_flags() {
     return f;
 }
 
-static inline float fp_fma_s(float a, float b, float c) { return __builtin_fmaf(a, b, c); }
-static inline double fp_fma_d(double a, double b, double c) { return __builtin_fma(a, b, c); }
-static inline float fp_sqrt_s(float a) { return __builtin_sqrtf(a); }
-static inline double fp_sqrt_d(double a) { return __builtin_sqrt(a); }
-
+static inline float fp_fma_s(float a, float b, float c) {
+    return __builtin_fmaf(a, b, c);
+}
+static inline double fp_fma_d(double a, double b, double c) {
+    return __builtin_fma(a, b, c);
+}
+static inline float fp_sqrt_s(float a) {
+    return __builtin_sqrtf(a);
+}
+static inline double fp_sqrt_d(double a) {
+    return __builtin_sqrt(a);
+}
 #endif
 
 // RISC-V rounding modes (frm / inst rm field).
@@ -280,7 +287,15 @@ struct SoftFloat {
     static bool is_zero(U a) { return !(a & ~SIGN); }
     static bool sign_of(U a) { return (a & SIGN) != 0; }
 
-    struct Unp { bool sign; int exp; U2 mant; bool zero; bool inf; bool nan; bool snan; };
+    struct Unp {
+        bool sign;
+        int exp;
+        U2 mant;
+        bool zero;
+        bool inf;
+        bool nan;
+        bool snan;
+    };
     static Unp unpack(U a) {
         Unp u;
         u.sign = sign_of(a);

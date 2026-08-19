@@ -410,10 +410,10 @@ static void interactive_serial_enable(Uart16550 *u) {
     u->stdin_flags = fcntl(STDIN_FILENO, F_GETFL);
     TTSIM_VERIFY(u->stdin_flags >= 0, SystemError, "fcntl(F_GETFL) failed: %s", strerror(errno));
     TTSIM_VERIFY(fcntl(STDIN_FILENO, F_SETFL, u->stdin_flags | O_NONBLOCK) == 0,
-                 SystemError, "fcntl(F_SETFL O_NONBLOCK) failed: %s", strerror(errno));
+        SystemError, "fcntl(F_SETFL O_NONBLOCK) failed: %s", strerror(errno));
     if (isatty(STDIN_FILENO)) {
         TTSIM_VERIFY(tcgetattr(STDIN_FILENO, &u->stdin_termios) == 0,
-                     SystemError, "tcgetattr(stdin) failed: %s", strerror(errno));
+            SystemError, "tcgetattr(stdin) failed: %s", strerror(errno));
         u->stdin_termios_valid = true;
         struct termios t = u->stdin_termios;
         t.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
@@ -424,7 +424,7 @@ static void interactive_serial_enable(Uart16550 *u) {
         t.c_cc[VTIME] = 0;
         t.c_cc[VINTR] = _POSIX_VDISABLE;
         TTSIM_VERIFY(tcsetattr(STDIN_FILENO, TCSANOW, &t) == 0,
-                     SystemError, "tcsetattr(stdin) failed: %s", strerror(errno));
+            SystemError, "tcsetattr(stdin) failed: %s", strerror(errno));
     }
     s_interactive_uart = u;
     atexit(interactive_serial_restore);

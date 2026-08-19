@@ -75,9 +75,18 @@ template<uint32_t hi, uint32_t lo>
 }
 
 template<int N> struct int_types;
-template<> struct int_types<32> { using int_t = int32_t; using uint_t = uint32_t; };
-template<> struct int_types<64> { using int_t = int64_t; using uint_t = uint64_t; };
-template<> struct int_types<128> { using int_t = __int128; using uint_t = unsigned __int128; };
+template<> struct int_types<32> {
+    using int_t = int32_t;
+    using uint_t = uint32_t;
+};
+template<> struct int_types<64> {
+    using int_t = int64_t;
+    using uint_t = uint64_t;
+};
+template<> struct int_types<128> {
+    using int_t = __int128;
+    using uint_t = unsigned __int128;
+};
 
 // Wrappers to provide value semantics without UB (similar to read/write_unaligned in Rust)
 template<class T> [[nodiscard]] T mem_rd(const void *p) {

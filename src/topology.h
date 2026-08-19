@@ -10,7 +10,9 @@
 // (n300, P300, QB/LB, Galaxy) supplies a different table and a larger NUM_CHIPS with
 // no other change. Links are listed in both directions. The eth tile index is the eth
 // channel (ETH_CORES_NOC0[chan]).
-struct EthLink { uint8_t src_chip, src_tile, dst_chip, dst_tile; };
+struct EthLink {
+    uint8_t src_chip, src_tile, dst_chip, dst_tile;
+};
 #if NUM_CHIPS > 1
 static constexpr EthLink ETH_PEER_TABLE[] = {
 #if TT_ARCH_VERSION == 0

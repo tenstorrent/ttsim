@@ -61,86 +61,23 @@ struct Rv64HartState {
 #endif
 
 #if TT_ARCH_VERSION == 0
+#define NUM_TILE_COLS 10
+#define NUM_TILE_ROWS 12
 #define NONTENSIX_COL_MASK 0x21
 #define NONTENSIX_ROW_MASK 0x41
 #elif TT_ARCH_VERSION == 1
+#define NUM_TILE_COLS 17
+#define NUM_TILE_ROWS 12
 #define NONTENSIX_COL_MASK 0x301
 #define NONTENSIX_ROW_MASK 0x03
 #endif
+#define TENSIX_COL_MASK (((1ul << NUM_TILE_COLS) - 1) & ~NONTENSIX_COL_MASK)
+#define TENSIX_ROW_MASK (((1ul << NUM_TILE_ROWS) - 1) & ~NONTENSIX_ROW_MASK)
 
 struct TensixThreadState {
-    THREAD_CFG0_REG_UNION()
-    THREAD_CFG1_REG_UNION()
-#if TT_ARCH_VERSION == 1
-    THREAD_CFG2_REG_UNION()
-    THREAD_CFG3_REG_UNION()
-    THREAD_CFG5_REG_UNION()
-    THREAD_CFG7_REG_UNION()
-    THREAD_CFG11_REG_UNION()
-    THREAD_CFG12_REG_UNION()
-    THREAD_CFG13_REG_UNION()
-    THREAD_CFG14_REG_UNION()
-    THREAD_CFG15_REG_UNION()
-    THREAD_CFG16_REG_UNION()
-    THREAD_CFG17_REG_UNION()
-    THREAD_CFG18_REG_UNION()
-    THREAD_CFG19_REG_UNION()
-    THREAD_CFG28_REG_UNION()
-    THREAD_CFG29_REG_UNION()
-    THREAD_CFG30_REG_UNION()
-    THREAD_CFG31_REG_UNION()
-    THREAD_CFG32_REG_UNION()
-    THREAD_CFG33_REG_UNION()
-    THREAD_CFG34_REG_UNION()
-    THREAD_CFG35_REG_UNION()
-    THREAD_CFG37_REG_UNION()
-    THREAD_CFG38_REG_UNION()
-    THREAD_CFG39_REG_UNION()
-    THREAD_CFG40_REG_UNION()
-    THREAD_CFG41_REG_UNION()
-    THREAD_CFG47_REG_UNION()
-    THREAD_CFG48_REG_UNION()
-    THREAD_CFG49_REG_UNION()
-    THREAD_CFG50_REG_UNION()
-    THREAD_CFG51_REG_UNION()
-    THREAD_CFG52_REG_UNION()
-    THREAD_CFG53_REG_UNION()
-    THREAD_CFG54_REG_UNION()
-#else
-    THREAD_CFG2_REG_UNION()
-    THREAD_CFG3_REG_UNION()
-    THREAD_CFG5_REG_UNION()
-    THREAD_CFG6_REG_UNION()
-    THREAD_CFG7_REG_UNION()
-    THREAD_CFG9_REG_UNION()
-    THREAD_CFG11_REG_UNION()
-    THREAD_CFG13_REG_UNION()
-    THREAD_CFG15_REG_UNION()
-    THREAD_CFG17_REG_UNION()
-    THREAD_CFG19_REG_UNION()
-    THREAD_CFG21_REG_UNION()
-    THREAD_CFG23_REG_UNION()
-    THREAD_CFG24_REG_UNION()
-    THREAD_CFG25_REG_UNION()
-    THREAD_CFG26_REG_UNION()
-    THREAD_CFG27_REG_UNION()
-    THREAD_CFG28_REG_UNION()
-    THREAD_CFG29_REG_UNION()
-    THREAD_CFG30_REG_UNION()
-    THREAD_CFG31_REG_UNION()
-    THREAD_CFG32_REG_UNION()
-    THREAD_CFG33_REG_UNION()
-    THREAD_CFG34_REG_UNION()
-    THREAD_CFG39_REG_UNION()
-    THREAD_CFG48_REG_UNION()
-    THREAD_CFG49_REG_UNION()
-    THREAD_CFG50_REG_UNION()
-    THREAD_CFG51_REG_UNION()
-    THREAD_CFG52_REG_UNION()
-    THREAD_CFG53_REG_UNION()
-    THREAD_CFG54_REG_UNION()
-    THREAD_CFG55_REG_UNION()
-#endif
+#define THREAD_CFG_REG_UNION(i) THREAD_CFG##i##_REG_UNION()
+    FOR_EACH_THREAD_CFG_REG(THREAD_CFG_REG_UNION)
+#undef THREAD_CFG_REG_UNION
 };
 
 struct TensixConfigState {
@@ -234,10 +171,8 @@ struct TensixConfigState {
     CFG86_REG_UNION()
     CFG92_REG_UNION()
     CFG93_REG_UNION()
-    CFG97_REG_UNION()
     CFG112_REG_UNION()
     uint32_t cfg113; // XXX 128-bit register not supported by our flow
-    CFG117_REG_UNION()
     CFG119_REG_UNION()
     CFG120_REG_UNION()
     CFG121_REG_UNION()
@@ -245,7 +180,6 @@ struct TensixConfigState {
     CFG125_REG_UNION()
     CFG140_REG_UNION()
     CFG141_REG_UNION()
-    CFG145_REG_UNION()
 #endif
 };
 
@@ -346,10 +280,16 @@ struct TensixState {
 
 struct BaseTile {
     uint32_t niu_cfg_0[NUM_NOCS];
-#if TT_ARCH_VERSION == 0
-    uint32_t noc_translation_x[NUM_NOCS][4];
-    uint32_t noc_translation_y[NUM_NOCS][4];
+    uint32_t router_cfg_0[NUM_NOCS];
+    uint32_t router_cfg_1[NUM_NOCS];
+    uint32_t router_cfg_2[NUM_NOCS];
+    uint32_t router_cfg_3[NUM_NOCS];
+    uint32_t noc_translation_x[NUM_NOCS][NUM_NOC_TRANSLATION_TABLES];
+    uint32_t noc_translation_y[NUM_NOCS][NUM_NOC_TRANSLATION_TABLES];
     uint32_t noc_id_logical[NUM_NOCS];
+#if TT_ARCH_VERSION == 1
+    uint32_t noc_id_translate_col_mask[NUM_NOCS];
+    uint32_t noc_id_translate_row_mask[NUM_NOCS];
 #endif
 };
 
@@ -387,10 +327,6 @@ struct TensixTile {
     uint32_t noc_ctrl[NUM_NOCS][NUM_NOC_CMD_BUFS];
     uint32_t noc_at_len_be[NUM_NOCS][NUM_NOC_CMD_BUFS];
     uint32_t noc_at_data[NUM_NOCS][NUM_NOC_CMD_BUFS];
-    uint32_t router_cfg_0[NUM_NOCS];
-    uint32_t router_cfg_1[NUM_NOCS];
-    uint32_t router_cfg_2[NUM_NOCS];
-    uint32_t router_cfg_3[NUM_NOCS];
     uint32_t niu_mst_atomic_resp_received[NUM_NOCS];
     uint32_t niu_mst_wr_ack_received[NUM_NOCS];
     uint32_t niu_mst_rd_resp_received[NUM_NOCS];
@@ -442,10 +378,6 @@ struct EthTile {
     uint32_t noc_ctrl[NUM_NOCS][NUM_NOC_CMD_BUFS];
     uint32_t noc_at_len_be[NUM_NOCS][NUM_NOC_CMD_BUFS];
     uint32_t noc_at_data[NUM_NOCS][NUM_NOC_CMD_BUFS];
-    uint32_t router_cfg_0[NUM_NOCS];
-    uint32_t router_cfg_1[NUM_NOCS];
-    uint32_t router_cfg_2[NUM_NOCS];
-    uint32_t router_cfg_3[NUM_NOCS];
     uint32_t niu_mst_atomic_resp_received[NUM_NOCS];
     uint32_t niu_mst_wr_ack_received[NUM_NOCS];
     uint32_t niu_mst_rd_resp_received[NUM_NOCS];
@@ -579,7 +511,7 @@ struct PcieTile {
 #if TT_ARCH_VERSION == 0
     uint64_t tlb_cfg[186];
 #elif TT_ARCH_VERSION == 1
-    uint32_t tlb_cfg[210*3];
+    uint32_t tlb_cfg[210 * 3];
     uint32_t dbi_device_control;
 #endif
 };

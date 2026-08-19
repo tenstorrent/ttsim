@@ -150,7 +150,7 @@ int main(int argc, char **argv) {
         free(buf);
     } else {
         TTSIM_VERIFY(inject_at == 0, ConfigurationError,
-                     "--uart-inject-at requires --uart-inject-text or --uart-inject-file");
+            "--uart-inject-at requires --uart-inject-text or --uart-inject-file");
     }
 
     for (uint32_t k = 0; k < num_loads; k++) {

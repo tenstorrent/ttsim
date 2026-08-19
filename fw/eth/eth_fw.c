@@ -171,7 +171,7 @@ extern void eth_yield_entry(void);
 _Static_assert((BCAST_CHUNK & 63u) == 0, "broadcast chunks must preserve host and destination alignment");
 _Static_assert(BCAST_READ_ADDR + BCAST_CHUNK <= NOC_BLOCK_STAGE_ADDR, "broadcast read and NOC stages overlap");
 _Static_assert(NOC_BLOCK_STAGE_ADDR + 15u + BCAST_CHUNK <= RELAY_RESP_BLOCK_ADDR,
-               "destination-aligned broadcast stage overlaps relay response buffer");
+    "destination-aligned broadcast stage overlaps relay response buffer");
 // Relay request slot (32 bytes). The whole slot lands in one NOC write, so the egress polls RLY_SEQ safely.
 #define RLY_OP 4
 #define RLY_SYS_LO 8
@@ -208,7 +208,9 @@ static void l1_copy(uint32_t dst, uint32_t src, uint32_t n) {
         PHYS_WR32(dst + i, PHYS_RD32(src + i));
     }
 }
-static inline uint32_t round16(uint32_t n) { return (n + 15u) & ~15u; }
+static inline uint32_t round16(uint32_t n) {
+    return (n + 15u) & ~15u;
+}
 
 // Trigger the command programmed into NOC command buffer 0 and wait for the NIU to accept it
 static void noc_trigger(void) {
@@ -265,7 +267,9 @@ static void eth_send(uint32_t dst, uint32_t src, uint32_t size) {
 }
 
 // --- Multi-hop relay: route a command to the local eth core that peers its target chip (see ROUTE_TABLE) ---
-static uint32_t my_noc_coord(void) { return PHYS_RD32(NOC0_REGS_BASE + NOC_NODE_ID) & 0xFFF; }
+static uint32_t my_noc_coord(void) {
+    return PHYS_RD32(NOC0_REGS_BASE + NOC_NODE_ID) & 0xFFF;
+}
 
 static inline bool routing_enabled(void) {
     return PHYS_RD32(ROUTING_FIRMWARE_STATE) == 0;
@@ -314,8 +318,12 @@ static uint32_t route_egress(uint32_t tc) {
 }
 
 // Intra-chip NOC copy to/from another eth core `coord`'s L1 (src/dst must be alignment-matched per noc_*).
-static void noc_put(uint32_t coord, uint32_t dst, uint32_t src, uint32_t size) { noc_write(dst, coord << 4, src, size); }
-static void noc_get(uint32_t coord, uint32_t src, uint32_t dst, uint32_t size) { noc_read(src, coord << 4, dst, size); }
+static void noc_put(uint32_t coord, uint32_t dst, uint32_t src, uint32_t size) {
+    noc_write(dst, coord << 4, src, size);
+}
+static void noc_get(uint32_t coord, uint32_t src, uint32_t dst, uint32_t size) {
+    noc_read(src, coord << 4, dst, size);
+}
 
 // Stream the host-DRAM broadcast payload (past its 32-byte header) in chunks, multicasting each to this
 // chip's tensix grid. `tag` is the host-window offset of the block; `sys_lo` the per-tensix L1 dest.
