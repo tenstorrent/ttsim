@@ -45,13 +45,37 @@ static constexpr uint32_t logical_harvesting_mask(uint32_t chip_id) {
 #endif
     return LOGICAL_HARVESTING_MASKS[chip_id];
 #else
-    return 0;
+#if NUM_CHIPS == 1
+    // proper harvest mask breaks metal tests for p150
+    // constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {0xC0}; // P150
+    constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {0x0}; // P150
+#elif NUM_CHIPS == 2
+    constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {0x2080, 0x110}; // P300
+#elif NUM_CHIPS == 4
+    constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {0x201, 0x12, 0x300, 0x900}; // QuietBox 2
+#elif NUM_CHIPS == 8
+    constexpr uint32_t LOGICAL_HARVESTING_MASKS[NUM_CHIPS] = {}; // LoudBox P150
+#elif NUM_CHIPS == 32
+    constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {
+        0x100,  0x2,   0x10,  0x1,   0x200,  0x800, 0x4,   0x80,
+        0x2000, 0x10,  0x8,   0x10,  0x2000, 0x10,  0x40,  0x200,
+        0x40,   0x800, 0x100, 0x20,  0x80,   0x10,  0x1,   0x8,
+        0x400,  0x2,   0x4,   0x4,   0x800,  0x20,  0x800, 0x1}; // BH Galaxy
+#else
+#error unsupported Blackhole topology
+#endif
+    return LOGICAL_HARVESTING_MASKS[chip_id];
 #endif
 }
 
 #if TT_ARCH_VERSION == 0
 static constexpr uint8_t TENSIX_COLUMNS[] = {1, 2, 3, 4, 6, 7, 8, 9};
 static constexpr uint8_t TENSIX_ROWS[] = {1, 2, 3, 4, 5, 7, 8, 9, 10, 11};
+#elif TT_ARCH_VERSION == 1
+static constexpr uint8_t TENSIX_COLUMNS[] = {1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16};
+static constexpr uint8_t TENSIX_HARVESTING_ORDER[] = {1, 16, 2, 15, 3, 14, 4, 13, 5, 12, 6, 11, 7, 10};
+static constexpr uint8_t GDDR_ROWS[] = {0, 1, 11, 2, 10, 3, 9, 4, 8, 5, 7, 6};
+#define ETH_LIVE_STATUS_MASK 0x0FFF // eth tiles 12,13 harvested
 #endif
 
 uint32_t tensix_harvested_row_mask() {
@@ -70,21 +94,46 @@ uint32_t tensix_harvested_row_mask() {
 #endif
 }
 
-#if TT_ARCH_VERSION == 0
-static uint32_t noc_translation_table_get(const uint32_t table[4], uint32_t index) {
-    TTSIM_ASSERT(index < 32);
-    return (table[index / 8] >> (4 * (index & 7))) & 0xF;
+uint32_t tensix_harvested_column_mask() {
+#if TT_ARCH_VERSION == 1
+    // Harvesting mask bits index TENSIX_COLUMNS, but router_cfg_1 is indexed by physical column.
+    uint32_t logical_mask = logical_harvesting_mask(g_current_chip_id);
+    uint32_t physical_mask = 0;
+    for (uint32_t column = 0; column < std::size(TENSIX_COLUMNS); column++) {
+        if (logical_mask & (1u << column)) {
+            physical_mask |= 1u << TENSIX_COLUMNS[column];
+        }
+    }
+    return physical_mask;
+#endif
+    return 0;
 }
 
-static void noc_translation_table_set(uint32_t table[4], uint32_t index, uint32_t value) {
+static uint32_t noc_translation_table_get(const uint32_t table[NUM_NOC_TRANSLATION_TABLES], uint32_t index) {
+    TTSIM_ASSERT(index < 32);
+#if TT_ARCH_VERSION == 0
+    return (table[index / 8] >> (4 * (index & 7))) & 0xF;
+#else
+    return (table[index / 6] >> (5 * (index % 6))) & 0x1F;
+#endif
+}
+
+static void noc_translation_table_set(uint32_t table[NUM_NOC_TRANSLATION_TABLES], uint32_t index, uint32_t value) {
+#if TT_ARCH_VERSION == 0
     TTSIM_ASSERT(index < 32);
     TTSIM_ASSERT(value < 16);
     uint32_t shift = 4 * (index & 7);
     table[index / 8] = (table[index / 8] & ~(0xFu << shift)) | (value << shift);
+#else
+    TTSIM_ASSERT(index < 32);
+    TTSIM_ASSERT(value < 32);
+    uint32_t shift = 5 * (index % 6);
+    table[index / 6] = (table[index / 6] & ~(0x1Fu << shift)) | (value << shift);
+#endif
 }
 
 static uint32_t noc_translation_table_find(
-    const uint32_t table[4], uint32_t physical_coord, uint32_t first, uint32_t last) {
+    const uint32_t table[NUM_NOC_TRANSLATION_TABLES], uint32_t physical_coord, uint32_t first, uint32_t last) {
     for (uint32_t logical_coord = first; logical_coord <= last; logical_coord++) {
         if (noc_translation_table_get(table, logical_coord) == physical_coord) {
             return logical_coord;
@@ -92,21 +141,17 @@ static uint32_t noc_translation_table_find(
     }
     TTSIM_ERROR(AssertionFailure, "physical_coord=%d first=%d last=%d", physical_coord, first, last);
 }
-#endif
 
 template<char tile_type>
 void base_tile_init(BaseTile *p_tile, uint32_t tile_id) {
     static_assert((tile_type == 'T') || (tile_type == 'E') || (tile_type == 'P') || (tile_type == 'A'));
-#if TT_ARCH_VERSION == 0
     uint32_t physical_coord = tile_to_coord(tile_type, tile_id);
     uint32_t logical_mask = logical_harvesting_mask(g_current_chip_id);
-#endif
     for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
-        p_tile->router_cfg_1[noc] = NONTENSIX_COL_MASK;
+        p_tile->router_cfg_1[noc] = NONTENSIX_COL_MASK | tensix_harvested_column_mask();
         p_tile->router_cfg_3[noc] = NONTENSIX_ROW_MASK | tensix_harvested_row_mask();
         p_tile->niu_cfg_0[noc] = NOC_REGS_NIU_CFG_0_RESET_VALUE | (1u << 14);
 #if TT_ARCH_VERSION == 0
-        // noc translation tables
         for (uint32_t coord = 0; coord < 16; coord++) {
             noc_translation_table_set(p_tile->noc_translation_x[noc], coord, coord);
             noc_translation_table_set(p_tile->noc_translation_y[noc], coord, coord);
@@ -152,6 +197,65 @@ void base_tile_init(BaseTile *p_tile, uint32_t tile_id) {
             logical_y = physical_y;
         }
         p_tile->noc_id_logical[noc] = logical_x | (logical_y << 6);
+#else
+        p_tile->noc_id_translate_col_mask[noc] = 0;
+        p_tile->noc_id_translate_row_mask[noc] = 3; // ARC blocks X translation on PCIe and Ethernet rows.
+        for (uint32_t coord = 0; coord < 32; coord++) {
+            uint32_t physical_x = (coord < NUM_TILE_COLS) ? coord : 0;
+            uint32_t physical_y = (coord < NUM_TILE_ROWS) ? coord : 0;
+            noc_translation_table_set(p_tile->noc_translation_x[noc], coord, noc ? 16 - physical_x : physical_x);
+            noc_translation_table_set(p_tile->noc_translation_y[noc], coord, noc ? 11 - physical_y : physical_y);
+        }
+        uint32_t translated_column = 0;
+        for (uint32_t column = 0; column < std::size(TENSIX_COLUMNS); column++) {
+            if (!(logical_mask & (1u << column))) {
+                uint32_t physical_x = TENSIX_COLUMNS[column];
+                noc_translation_table_set(
+                    p_tile->noc_translation_x[noc], TENSIX_COLUMNS[translated_column++], noc ? 16 - physical_x : physical_x);
+            }
+        }
+        translated_column = std::size(TENSIX_COLUMNS);
+        for (uint32_t physical_x : TENSIX_HARVESTING_ORDER) {
+            for (uint32_t column = 0; column < std::size(TENSIX_COLUMNS); column++) {
+                if ((TENSIX_COLUMNS[column] == physical_x) && (logical_mask & (1u << column))) {
+                    noc_translation_table_set(
+                        p_tile->noc_translation_x[noc], TENSIX_COLUMNS[--translated_column], noc ? 16 - physical_x : physical_x);
+                }
+            }
+        }
+        TTSIM_ASSERT(translated_column + __builtin_popcount(logical_mask) == std::size(TENSIX_COLUMNS));
+        for (uint32_t physical_y = 2; physical_y <= 11; physical_y++) {
+            noc_translation_table_set(p_tile->noc_translation_y[noc], physical_y, noc ? 11 - physical_y : physical_y);
+        }
+        noc_translation_table_set(p_tile->noc_translation_x[noc], 17, noc ? 16 : 0);
+        noc_translation_table_set(p_tile->noc_translation_x[noc], 18, noc ? 7 : 9);
+        for (uint32_t row = 0; row < std::size(GDDR_ROWS); row++) {
+            uint32_t physical_y = GDDR_ROWS[row];
+            noc_translation_table_set(p_tile->noc_translation_y[noc], 12 + row, noc ? 11 - physical_y : physical_y);
+        }
+        noc_translation_table_set(p_tile->noc_translation_x[noc], 19, noc ? 14 : 2);
+        noc_translation_table_set(p_tile->noc_translation_y[noc], 24, noc ? 11 : 0);
+        for (uint32_t eth = 0; eth < __builtin_popcount(ETH_LIVE_STATUS_MASK); eth++) {
+            uint32_t physical_x = TENSIX_HARVESTING_ORDER[eth];
+            noc_translation_table_set(p_tile->noc_translation_x[noc], 20 + eth, noc ? 16 - physical_x : physical_x);
+        }
+        noc_translation_table_set(p_tile->noc_translation_y[noc], 25, noc ? 10 : 1);
+        // noc logical id
+        if constexpr (tile_type == 'T') {
+            uint32_t physical_x = physical_coord & 63;
+            uint32_t physical_y = physical_coord >> 6;
+            uint32_t logical_x = noc_translation_table_find(p_tile->noc_translation_x[noc],
+                noc ? 16 - physical_x : physical_x, TENSIX_COLUMNS[0],
+                TENSIX_COLUMNS[std::size(TENSIX_COLUMNS) - 1]);
+            p_tile->noc_id_logical[noc] = logical_x | (physical_y << 6);
+        } else if constexpr (tile_type == 'E') { // Ethernet tiles use logical coordinates translated by the NIU
+            p_tile->noc_id_logical[noc] = (tile_id < 12) ? ((20 + tile_id) | (25 << 6)) : physical_coord;
+        } else if constexpr (tile_type == 'P') {
+            p_tile->noc_id_logical[noc] = 19 | (24 << 6);
+        } else {
+            static_assert(tile_type == 'A');
+            p_tile->noc_id_logical[noc] = 8;
+        }
 #endif
     }
 }
@@ -263,7 +367,6 @@ void p_tile_init() {
 #define ETH_LIVE_STATUS_MASK 0xFFFF     // all 16 eth tiles live
 #elif TT_ARCH_VERSION == 1
 #define FLASH_BUNDLE_VERSION 0x12050000 // v18.5
-#define ETH_LIVE_STATUS_MASK 0x0FFF     // eth tiles 12,13 harvested
 #define ARC_MSG_QCB_CSM_OFFSET 0x300
 #define ARC_MSG_QUEUE_CSM_OFFSET 0x400
 #define ARC_MSG_NUM_QUEUES 4
@@ -288,6 +391,8 @@ static uint64_t board_id(uint32_t chip_id) {
     return (uint64_t(0x400) << 32) | 1; // P150
 #elif NUM_CHIPS == 4
     return ((uint64_t(0x440) << 32) | 1) + (chip_id / 2); // QuietBox 2: two P300 cards
+#elif NUM_CHIPS == 8
+    return (uint64_t(0x400) << 32) | (1 + chip_id); // LoudBox: eight P150 cards
 #elif NUM_CHIPS == 32
     return (uint64_t(0x470) << 32) | 1; // BH Galaxy
 #else
@@ -300,7 +405,9 @@ static uint32_t asic_location(uint32_t chip_id) {
 #if TT_ARCH_VERSION == 0
     return chip_id;
 #else
-#if NUM_CHIPS == 4
+#if NUM_CHIPS == 8
+    return 0; // each P150 card has one ASIC
+#elif NUM_CHIPS == 4
     return 1 - (chip_id & 1);
 #else
     return chip_id;
@@ -310,7 +417,9 @@ static uint32_t asic_location(uint32_t chip_id) {
 
 #if TT_ARCH_VERSION == 1
 static uint32_t pcie_usage(uint32_t chip_id) {
-#if NUM_CHIPS <= 4
+#if NUM_CHIPS == 8
+    return 1; // each P150 uses its PCIe0 endpoint
+#elif NUM_CHIPS <= 4
     return asic_location(chip_id) ? 4 : 1; // the P300's loc-1 ASIC owns the x4 link
 #else
     return (chip_id & 1) ? 4 : 1;
@@ -464,7 +573,12 @@ static void bh_eth_link_init(uint32_t tile_id) {
         mem_wr<uint32_t>(&p_tile->sram[REMOTE + 20], 0); // asic_id_hi
         mem_wr<uint32_t>(&p_tile->sram[REMOTE + 24], 1 + remote_chip); // asic_id_lo
         mem_wr<uint8_t>(&p_tile->sram[REMOTE + 2], uint8_t(remote_eth)); // eth_id (remote channel)
+#if NUM_CHIPS == 8
+        // P150 base FW before 18.12 numbers logical channels after the four PCIe SerDes channels.
+        mem_wr<uint8_t>(&p_tile->sram[REMOTE + 3], uint8_t(remote_eth - 4)); // logical_eth_id
+#else
         mem_wr<uint8_t>(&p_tile->sram[REMOTE + 3], uint8_t(remote_eth)); // logical_eth_id
+#endif
         mem_wr<uint32_t>(&p_tile->sram[REMOTE + 4], uint32_t(remote_board_id >> 32)); // board_id_hi
         mem_wr<uint32_t>(&p_tile->sram[REMOTE + 8], uint32_t(remote_board_id)); // board_id_lo
         p_tile->soft_reset_0 &= ~0x800u;
@@ -477,6 +591,18 @@ static void bh_eth_link_init(uint32_t tile_id) {
     // eth_status.postcode reports how far the base FW's eth_init() got; tt-metal waits for a terminal
     // value (PASS/FAIL/SKIP) on every idle eth core before resetting it. Init completes -> PASS.
     mem_wr<uint32_t>(&p_tile->sram[0x7CC00], 0xC0DEA000); // eth_status.postcode = POSTCODE_ETH_INIT_PASS
+}
+
+static uint32_t tensix_enabled_column_telemetry() {
+    // ENABLED_TENSIX_COL bits index TENSIX_HARVESTING_ORDER, not physical NOC columns.
+    uint32_t physical_mask = tensix_harvested_column_mask();
+    uint32_t enabled_mask = 0;
+    for (uint32_t column = 0; column < std::size(TENSIX_HARVESTING_ORDER); column++) {
+        if (!(physical_mask & (1u << TENSIX_HARVESTING_ORDER[column]))) {
+            enabled_mask |= 1u << column;
+        }
+    }
+    return enabled_mask;
 }
 #endif
 
@@ -504,6 +630,7 @@ void a_tile_init() {
     uint32_t chip_asic_location = asic_location(g_current_chip_id);
 #if TT_ARCH_VERSION == 1
     uint32_t chip_pcie_usage = pcie_usage(g_current_chip_id);
+    uint32_t enabled_tensix_cols = tensix_enabled_column_telemetry();
 #endif
     bool any_rows_harvested = logical_harvesting_mask(g_current_chip_id) != 0;
 
@@ -526,8 +653,9 @@ void a_tile_init() {
         {32, 1},                        // TIMER_HEARTBEAT
         {52, chip_asic_location},       // ASIC_LOCATION
 #if TT_ARCH_VERSION == 1
+        {34, enabled_tensix_cols},      // ENABLED_TENSIX_COL
         {38, chip_pcie_usage},          // PCIE_USAGE
-        {35, 0x0FFF},                   // ENABLED_ETH: harvest the top 2 eth channels (12,13)
+        {35, ETH_LIVE_STATUS_MASK},     // ENABLED_ETH
         {61, 0x0},                      // ASIC_ID_HIGH
         {62, 1 + g_current_chip_id},    // ASIC_ID_LOW
 #endif
@@ -1028,8 +1156,6 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
     }
 }
 
-// XXX This only handles some cases for WH/BH; need to finish it out
-// XXX Need to do this based on the remapping registers
 uint32_t remap_virtual_coordinate(const BaseTile *base_tile, uint32_t noc_instance, uint32_t coord) {
     uint32_t coord_x = coord & 63;
     uint32_t coord_y = coord >> 6;
@@ -1039,6 +1165,8 @@ uint32_t remap_virtual_coordinate(const BaseTile *base_tile, uint32_t noc_instan
     if (base_tile->niu_cfg_0[noc_instance] & (1u << 14)) {
         coord_x = noc_translation_table_get(base_tile->noc_translation_x[noc_instance], coord_x);
         coord_y = noc_translation_table_get(base_tile->noc_translation_y[noc_instance], coord_y);
+    } else {
+        TTSIM_ERROR(UnimplementedFunctionality, "translation should not be disabled");
     }
     TTSIM_VERIFY((coord_x <= 9) && (coord_y <= 11), UnimplementedFunctionality, "invalid coordinate after virtualization %d,%d", coord_x, coord_y);
     if (noc_instance) {
@@ -1047,43 +1175,25 @@ uint32_t remap_virtual_coordinate(const BaseTile *base_tile, uint32_t noc_instan
     }
     return coord_x | (coord_y << 6);
 #elif TT_ARCH_VERSION == 1
-    if (coord_y <= 1) { // first two rows have no translation at all
-        // do nothing
-    } else if (coord_y <= 11) { // Tensix tiles
-        TTSIM_VERIFY((coord_x >= 1) && (coord_x <= 16), UnimplementedFunctionality, "invalid coordinate (%d,%d)", coord_x, coord_y);
-        // no translation applied, at least not until we support harvesting
-    } else if (coord_y == 25) { // Logical Ethernet tiles
-        TTSIM_VERIFY((coord_x >= 20) && (coord_x <= 31), UnimplementedFunctionality, "invalid coordinate (%d,%d)", coord_x, coord_y);
-        uint32_t tile_id = coord_x - 20; // E tile ID
-        if (tile_id & 1) {
-            coord_x = 16 - (tile_id >> 1);
-        } else {
-            coord_x = 1 + (tile_id >> 1);
+    TTSIM_VERIFY(coord <= 0xFFF, AssertionFailure, "coord=0x%x", coord);
+    TTSIM_VERIFY((coord_x < 32) && (coord_y < 32), UnimplementedFunctionality, "invalid virtual coordinate %d,%d", coord_x, coord_y);
+    if (base_tile->niu_cfg_0[noc_instance] & (1u << 14)) {
+        uint32_t virtual_x = coord_x;
+        uint32_t virtual_y = coord_y;
+        if (!(base_tile->noc_id_translate_row_mask[noc_instance] & (1u << virtual_y))) {
+            coord_x = noc_translation_table_get(base_tile->noc_translation_x[noc_instance], virtual_x);
+            if (noc_instance) {
+                coord_x = 16 - coord_x;
+            }
         }
-        coord_y = 1;
-    } else if ((coord_x == 17) || (coord_x == 18)) { // DRAM tiles
-        switch (coord_y) {
-            case 12: coord_y = 0; break;
-            case 13: coord_y = 1; break;
-            case 14: coord_y = 11; break;
-            case 15: coord_y = 2; break;
-            case 16: coord_y = 10; break;
-            case 17: coord_y = 3; break;
-            case 18: coord_y = 5; break;
-            case 19: coord_y = 7; break;
-            case 20: coord_y = 6; break;
-            case 21: coord_y = 9; break;
-            case 22: coord_y = 4; break;
-            case 23: coord_y = 8; break;
-            default: TTSIM_ERROR(UnimplementedFunctionality, "invalid coordinate (%d,%d)", coord_x, coord_y);
+        if (!(base_tile->noc_id_translate_col_mask[noc_instance] & (1u << virtual_x))) {
+            coord_y = noc_translation_table_get(base_tile->noc_translation_y[noc_instance], virtual_y);
+            if (noc_instance) {
+                coord_y = 11 - coord_y;
+            }
         }
-        coord_x = (coord_x == 18) ? 0 : 9;
-    } else if ((coord_x == 19) && (coord_y == 24)) { // PCIE tile -- assumes PCIE 0 for now
-        coord_x = 2;
-        coord_y = 0;
-    } else {
-        TTSIM_ERROR(UnimplementedFunctionality, "don't know how to translate (%d,%d)", coord_x, coord_y);
     }
+    TTSIM_VERIFY((coord_x <= 16) && (coord_y <= 11), UnimplementedFunctionality, "invalid coordinate after virtualization %d,%d", coord_x, coord_y);
 #endif
     return coord_x | (coord_y << 6);
 }
@@ -1122,24 +1232,24 @@ static uint32_t base_noc_regs_rd32(const BaseTile *p_tile, char tile_type, uint3
         case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_1:
         case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_2:
         case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_3:
+#if TT_ARCH_VERSION == 1
+        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_4:
+        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_5:
+#endif
             return p_tile->noc_translation_x[noc_instance][(offset - NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_0) / 4];
         case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_0:
         case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_1:
         case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_2:
         case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_3:
+#if TT_ARCH_VERSION == 1
+        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_4:
+        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_5:
+#endif
             return p_tile->noc_translation_y[noc_instance][(offset - NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_0) / 4];
-#if TT_ARCH_VERSION == 0
         case NOC_REGS_NOC_ID_LOGICAL: return p_tile->noc_id_logical[noc_instance];
-#elif TT_ARCH_VERSION == 1
-        case NOC_REGS_NOC_ID_LOGICAL:
-            if (tile_type == 'T') { // Without harvesting, logical == physical for Tensix tiles
-                return tile_to_coord(tile_type, tile_id);
-            } else if (tile_type == 'E') { // Ethernet tiles use logical coordinates (20+tile_id, 25) which the NIU translates to physical
-                TTSIM_VERIFY(tile_id < 12, UnimplementedFunctionality, "NOC_ID_LOGICAL: tile_type=%c tile_id=%d", tile_type, tile_id);
-                return (20 + tile_id) | (25 << 6);
-            } else {
-                TTSIM_ERROR(UnimplementedFunctionality, "noc_id_logical not implemented for tile_type=%c", tile_type);
-            }
+#if TT_ARCH_VERSION == 1
+        case NOC_REGS_NOC_ID_TRANSLATE_COL_MASK: return p_tile->noc_id_translate_col_mask[noc_instance];
+        case NOC_REGS_NOC_ID_TRANSLATE_ROW_MASK: return p_tile->noc_id_translate_row_mask[noc_instance];
 #endif
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "tile_type=%c tile_id=%d offset=0x%x", tile_type, tile_id, offset);
@@ -1601,20 +1711,30 @@ static void noc_regs_wr32(uint32_t tile_id, uint32_t noc_instance, uint32_t offs
             }
             break;
         case NOC_REGS_NIU_CFG_0: p_tile->base.niu_cfg_0[noc_instance] = data; break;
-#if TT_ARCH_VERSION == 0
         case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_0:
         case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_1:
         case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_2:
         case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_3:
+#if TT_ARCH_VERSION == 1
+        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_4:
+        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_5:
+#endif
             p_tile->base.noc_translation_x[noc_instance][(offset - NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_0) / 4] = data;
             break;
         case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_0:
         case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_1:
         case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_2:
         case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_3:
+#if TT_ARCH_VERSION == 1
+        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_4:
+        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_5:
+#endif
             p_tile->base.noc_translation_y[noc_instance][(offset - NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_0) / 4] = data;
             break;
         case NOC_REGS_NOC_ID_LOGICAL: p_tile->base.noc_id_logical[noc_instance] = data; break;
+#if TT_ARCH_VERSION == 1
+        case NOC_REGS_NOC_ID_TRANSLATE_COL_MASK: p_tile->base.noc_id_translate_col_mask[noc_instance] = data; break;
+        case NOC_REGS_NOC_ID_TRANSLATE_ROW_MASK: p_tile->base.noc_id_translate_row_mask[noc_instance] = data; break;
 #endif
         case NOC_REGS_ROUTER_CFG_0: p_tile->base.router_cfg_0[noc_instance] = data; break;
         case NOC_REGS_ROUTER_CFG_1:
@@ -2024,15 +2144,15 @@ static std::pair<bool, uint32_t> t_tile_mmio_rd32(uint32_t tile_id, uint32_t ris
             return {true, riscv_debug_regs_rd32<'T'>(tile_id, 0, addr - RISCV_DEBUG_REGS_BASE)};
         case NOC0_REGS_BASE ... NOC0_REGS_LIMIT:
             return {true, noc_regs_rd32<'T'>(tile_id, 0, addr - NOC0_REGS_BASE)};
-#if NUM_NOCS > 1
         case NOC1_REGS_BASE ... NOC1_REGS_LIMIT:
             return {true, noc_regs_rd32<'T'>(tile_id, 1, addr - NOC1_REGS_BASE)};
-#endif
         case NOC_OVERLAY_BASE ... NOC_OVERLAY_BASE + 0x3FFFF:
             return {true, noc_overlay_rd32<'T'>(tile_id, addr - NOC_OVERLAY_BASE)};
-#if TT_ARCH_VERSION == 1
-        case TENSIX_DST_BASE ... TENSIX_DST_LIMIT:
-            TTSIM_ERROR(UnimplementedFunctionality, "tensix_dst: offset=0x%x", uint32_t(addr - TENSIX_DST_BASE));
+#if TT_ARCH_VERSION >= 1
+        case TENSIX_DST_BASE ... TENSIX_DST_LIMIT: {
+            auto [tensix_id, pipe] = trisc_pipe(riscv_id);
+            return {true, tensix_dst_rd32(&g_t_tiles[tile_id].tensix[tensix_id], pipe, addr - TENSIX_DST_BASE)};
+        }
 #endif
         case TENSIX_REGFILE_BASE ... TENSIX_REGFILE_LIMIT:
             return {true, tensix_regfile_rd32(tile_id, riscv_id, addr - TENSIX_REGFILE_BASE)};
@@ -2072,18 +2192,16 @@ static bool t_tile_mmio_wr32(uint32_t tile_id, uint32_t riscv_id, uint64_t addr,
         case NOC0_REGS_BASE ... NOC0_REGS_LIMIT:
             noc_regs_wr32<'T'>(tile_id, 0, addr - NOC0_REGS_BASE, data);
             return true;
-#if NUM_NOCS > 1
         case NOC1_REGS_BASE ... NOC1_REGS_LIMIT:
             noc_regs_wr32<'T'>(tile_id, 1, addr - NOC1_REGS_BASE, data);
             return true;
-#endif
         case NOC_OVERLAY_BASE ... NOC_OVERLAY_BASE + 0x3FFFF:
             noc_overlay_wr32<'T'>(tile_id, addr - NOC_OVERLAY_BASE, data);
             return true;
         case TENSIX_MOP_CFG_BASE ... TENSIX_MOP_CFG_LIMIT:
             tensix_mop_cfg_wr32(tile_id, riscv_id, addr - TENSIX_MOP_CFG_BASE, data);
             return true;
-#if TT_ARCH_VERSION == 1
+#if TT_ARCH_VERSION >= 1
         case TENSIX_DST_BASE ... TENSIX_DST_LIMIT:
             TTSIM_ERROR(UnimplementedFunctionality, "tensix_dst: offset=0x%x", uint32_t(addr - TENSIX_DST_BASE));
 #endif
@@ -2141,10 +2259,8 @@ static uint32_t e_tile_mmio_rd32(uint32_t tile_id, uint64_t addr) {
 #endif
         case NOC0_REGS_BASE ... NOC0_REGS_LIMIT:
             return noc_regs_rd32<'E'>(tile_id, 0, addr - NOC0_REGS_BASE);
-#if NUM_NOCS > 1
         case NOC1_REGS_BASE ... NOC1_REGS_LIMIT:
             return noc_regs_rd32<'E'>(tile_id, 1, addr - NOC1_REGS_BASE);
-#endif
         case NOC_OVERLAY_BASE ... NOC_OVERLAY_BASE + 0x3FFFF:
             return noc_overlay_rd32<'E'>(tile_id, addr - NOC_OVERLAY_BASE);
         case ETH_RXQ_BASE ... ETH_RXQ_LIMIT:
@@ -2188,10 +2304,14 @@ static bool e_tile_mmio_wr32(uint32_t tile_id, uint64_t addr, uint32_t data) {
                 // erisc1 runs from a garbage PC with an invalid stack pointer).
                 if (p_tile->subordinate_ierisc_reset_pc) {
                     p_tile->rv32[1].pc = p_tile->subordinate_ierisc_reset_pc;
-                    // Establish the stack pointer the faked base FW would have set before
-                    // jumping to the app entry (the app starts with a C prologue that
-                    // assumes a valid sp); matches the ETH_MAILBOX release-core path.
-                    p_tile->rv32[1].x_regs[2] = 0xFFB02000;
+                    // Establish the stack and global pointers the faked base FW would have set
+                    // before jumping to the app entry (the app starts with a C prologue that
+                    // assumes a valid sp, and reaches its LDM globals via gp-relative loads).
+                    // gp is __global_pointer$ from the tt-metal subordinate-ierisc app link; it is
+                    // per-firmware, so it differs from the active-erisc app's gp on the RUN_MSG_GO
+                    // path below.
+                    p_tile->rv32[1].x_regs[2] = 0xFFB02000; // sp = top of eth LDM
+                    p_tile->rv32[1].x_regs[3] = 0xFFB007F0; // gp = __global_pointer$
                     ttsim_rv32_set_core_active('E', tile_id, 1, true);
                 }
             }
@@ -2224,11 +2344,9 @@ static bool e_tile_mmio_wr32(uint32_t tile_id, uint64_t addr, uint32_t data) {
         case NOC0_REGS_BASE ... NOC0_REGS_LIMIT:
             noc_regs_wr32<'E'>(tile_id, 0, addr - NOC0_REGS_BASE, data);
             return true;
-#if NUM_NOCS > 1
         case NOC1_REGS_BASE ... NOC1_REGS_LIMIT:
             noc_regs_wr32<'E'>(tile_id, 1, addr - NOC1_REGS_BASE, data);
             return true;
-#endif
         case NOC_OVERLAY_BASE ... NOC_OVERLAY_BASE + 0x3FFFF:
             noc_overlay_wr32<'E'>(tile_id, addr - NOC_OVERLAY_BASE, data);
             return true;
@@ -2366,8 +2484,9 @@ static uint32_t arc_reset_unit_rd32(uint32_t offset) {
     }
 }
 
-static uint32_t arc_harvesting_mask(uint32_t chip_id) {
-    static constexpr uint8_t LOGICAL_TO_ARC_BIT[] = {1, 3, 5, 7, 9, 8, 6, 4, 2, 0};
+static constexpr uint32_t arc_harvesting_mask(uint32_t chip_id) {
+#if TT_ARCH_VERSION == 0
+    constexpr uint8_t LOGICAL_TO_ARC_BIT[] = {1, 3, 5, 7, 9, 8, 6, 4, 2, 0};
     uint32_t logical_mask = logical_harvesting_mask(chip_id);
     uint32_t arc_mask = 0;
     for (uint32_t row = 0; row < std::size(LOGICAL_TO_ARC_BIT); row++) {
@@ -2376,6 +2495,9 @@ static uint32_t arc_harvesting_mask(uint32_t chip_id) {
         }
     }
     return arc_mask;
+#else
+    return logical_harvesting_mask(chip_id);
+#endif
 }
 
 static void arc_service_message(uint8_t code, uint32_t *resp) {
@@ -2734,20 +2856,21 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
                 // and every get_arg_val() reads L1 address 0 (e.g. the fabric router's per-channel
                 // connection_live_semaphore comes back null and the worker data path hangs). These
                 // FW-owned LDM globals sit below the kernel's .bss so crt0 never clears them; their
-                // addresses are the active-erisc FW/kernel ABI: rta_l1_base @ 0xFFB00714, crta @ 0xFFB00710.
+                // addresses are the active-erisc FW/kernel ABI: rta_l1_base @ 0xFFB0070C, crta @ 0xFFB00708.
+                // these offsets are only for single-erisc mode - multi-erisc will fail if this is reached.
                 uint8_t *ldm = g_e_tiles[tile_id].rv32_local_ram[0];
-                mem_wr<uint32_t>(&ldm[0xFFB00714 - RISCV_LOCAL_MEM_BASE], kcfg_base + mem_rd<uint16_t>(&l1[launch + 28]));
-                mem_wr<uint32_t>(&ldm[0xFFB00710 - RISCV_LOCAL_MEM_BASE], kcfg_base + mem_rd<uint16_t>(&l1[launch + 30]));
-                // Likewise fake firmware risc_init()'s my_x[]/my_y[] (FW-owned LDM globals my_y @ 0xFFB00708,
-                // my_x @ 0xFFB0070C, each uint8_t[NUM_NOCS]). risc_init sets my_x[n]/my_y[n] from
+                mem_wr<uint32_t>(&ldm[0xFFB0070C - RISCV_LOCAL_MEM_BASE], kcfg_base + mem_rd<uint16_t>(&l1[launch + 28]));
+                mem_wr<uint32_t>(&ldm[0xFFB00708 - RISCV_LOCAL_MEM_BASE], kcfg_base + mem_rd<uint16_t>(&l1[launch + 30]));
+                // Likewise fake firmware risc_init()'s my_x[]/my_y[] (FW-owned LDM globals my_y @ 0xFFB00700,
+                // my_x @ 0xFFB00704, each uint8_t[NUM_NOCS]). risc_init sets my_x[n]/my_y[n] from
                 // NOC_CFG(NOC_ID_LOGICAL); the kernel later writes WorkerXY(my_x[0], my_y[0]) into a peer EDM's
                 // connection info at connect (edm_fabric_worker_adapters.hpp), and the peer credits back to that
                 // coord. Without this they stay 0, so the fabric router's free-space credit targets NOC (0,0)
                 // (DRAM) -- the multi-hop forwarding hang/abort. NOC_ID_LOGICAL here matches NOC_REGS_NOC_ID_LOGICAL.
                 uint32_t nidl = (20 + tile_id) | (25 << 6); // logical eth coord (20+tile_id, 25), both NOCs
                 for (uint32_t n = 0; n < 2; n++) { // NUM_NOCS == 2 on BH
-                    ldm[(0xFFB0070C - RISCV_LOCAL_MEM_BASE) + n] = nidl & 0x3F;        // my_x[n]
-                    ldm[(0xFFB00708 - RISCV_LOCAL_MEM_BASE) + n] = (nidl >> 6) & 0x3F; // my_y[n]
+                    ldm[(0xFFB00704 - RISCV_LOCAL_MEM_BASE) + n] = nidl & 0x3F;        // my_x[n]
+                    ldm[(0xFFB00700 - RISCV_LOCAL_MEM_BASE) + n] = (nidl >> 6) & 0x3F; // my_y[n]
                 }
                 g_e_tiles[tile_id].rv32[0].pc = entry;
                 g_e_tiles[tile_id].rv32[0].x_regs[1] = 0; // ra=0: kernel_main returns here on exit
@@ -2760,6 +2883,7 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
                 TTSIM_VERIFY(size == 4, UnimplementedFunctionality, "ETH_MAILBOX size=0x%x", size);
                 uint32_t data = mem_rd<uint32_t>(p);
                 if (data == 0xCA110002) { // ETH_MSG_CALL and ETH_MSG_RELEASE_CORE
+                    TTSIM_ERROR(UntestedFunctionality, "Blackhole multi-erisc mode");
                     uint8_t *mailbox = &g_e_tiles[tile_id].sram[addr];
                     g_e_tiles[tile_id].rv32[0].pc = mem_rd<uint32_t>(mailbox + 4);
                     g_e_tiles[tile_id].rv32[0].x_regs[2] = 0xFFB02000;

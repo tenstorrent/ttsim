@@ -15,7 +15,7 @@ CC_OPTS = [
 def rules(ctx):
     assert ctx.host.os == 'linux', 'eth fw can only be built on Linux (the SFPI cross compiler is Linux-only)'
 
-    sfpi_path = ctx.env.get('SFPI_PATH', ctx.path.expanduser('~/sfpi'))
+    sfpi_path = ctx.env.get('SFPI_PATH', ctx.path.expanduser('~/sfpi-7.3.0'))
     sfpi_gcc = f'{sfpi_path}/compiler/bin/riscv-tt-elf-gcc'
     sfpi_objcopy = f'{sfpi_path}/compiler/bin/riscv-tt-elf-objcopy'
 

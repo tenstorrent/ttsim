@@ -497,6 +497,9 @@ static inline void math_update_rwc(uint32_t *p_rwc, uint32_t *p_rwc_cr, uint32_t
 // XXX switch statement is clunky and perhaps slow; would be better if these were stored as an array
 // could hack this by hardcoding the fact that bit positions are all the same?
 static void math_update_counters(TensixState *p_tensix, uint32_t pipe, uint32_t addr_mode, bool update_fidelity_phase) {
+    uint32_t src_a_incr, src_a_cr, src_a_clear;
+    uint32_t src_b_incr, src_b_cr, src_b_clear;
+    uint32_t dst_incr, dst_cr, dst_clear, dst_c_to_cr;
 #if TT_ARCH_VERSION == 0
     TTSIM_ASSERT(addr_mode < 4);
     if (p_tensix->bias[pipe] || p_tensix->thread[pipe].ADDR_MOD_SET_Base) { // note that ADDR_MOD_SET_Base was removed in BH
@@ -505,9 +508,6 @@ static void math_update_counters(TensixState *p_tensix, uint32_t pipe, uint32_t 
 #else
     TTSIM_VERIFY(!p_tensix->bias[pipe], UnsupportedFunctionality, "bias=%d", p_tensix->bias[pipe]);
 #endif
-    uint32_t src_a_incr, src_a_cr, src_a_clear;
-    uint32_t src_b_incr, src_b_cr, src_b_clear;
-    uint32_t dst_incr, dst_cr, dst_clear, dst_c_to_cr;
     uint32_t fidelity_incr, fidelity_clear, bias_incr, bias_clear;
     switch (addr_mode) {
 #define ADDR_MODE(i) \
@@ -659,6 +659,44 @@ static inline int32_t sign_mag32_total_order(uint32_t x) {
         return x;
     }
 }
+
+#if TT_ARCH_VERSION >= 1
+uint32_t tensix_dst_rd32(TensixState *p_tensix, uint32_t pipe, uint32_t offset) {
+#if TT_ARCH_VERSION == 1
+    uint32_t state_id = get_state_id(p_tensix, pipe);
+    const TensixConfigState *p_config = &p_tensix->config[state_id];
+    TTSIM_VERIFY(pipe == 1, UnimplementedFunctionality, "pipe=%d", pipe);
+    uint32_t fmt = p_config->RISC_DEST_ACCESS_CTRL_SEC1_fmt;
+    bool unsigned_int = p_config->RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int;
+    TTSIM_VERIFY(!fmt || (fmt == 2) || (fmt == 3), UnimplementedFunctionality, "fmt=%d", fmt);
+    TTSIM_VERIFY(!unsigned_int, UnimplementedFunctionality, "unsigned_int=%d", unsigned_int);
+
+    TTSIM_VERIFY(!(offset & 3), AssertionFailure, "misaligned offset=0x%x", offset);
+    uint32_t addr = offset >> 2;
+    uint32_t row, col, value;
+    if (fmt == 0) { // FP32
+        row = addr / 16;
+        col = addr % 16;
+        TTSIM_VERIFY(row < DST_ROWS / 2, AssertionFailure, "row=%d", row); // aperture is sized to exact size of Dst
+        value = dst_decode_fp32(read_dst32b(p_tensix, row, col));
+    } else {
+        row = addr / 8;
+        col = addr % 8;
+        TTSIM_VERIFY(row < DST_ROWS, AssertionFailure, "row=%d", row); // aperture is sized to exact size of Dst
+        if (fmt == 2) { // FP16
+            value = dst_decode_fp16(read_dst16b(p_tensix, row, 2*col));
+            value |= dst_decode_fp16(read_dst16b(p_tensix, row, 2*col + 1)) << 16;
+        } else { // BF16
+            value = dst_decode_bf16(read_dst16b(p_tensix, row, 2*col));
+            value |= dst_decode_bf16(read_dst16b(p_tensix, row, 2*col + 1)) << 16;
+        }
+    }
+    return value;
+#else
+    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
+#endif
+}
+#endif
 
 TENSIX_EXECUTE_MOVD2A() {
     TTSIM_VERIFY(instr_mod == 2, UnsupportedFunctionality, "instr_mod=%d", instr_mod);
@@ -2025,12 +2063,6 @@ TENSIX_EXECUTE_PACR() {
             p_config->TILE_ROW_SET_MAPPING_1_row_set_mapping_15,
         }
     };
-    TTSIM_VERIFY(!p_config->PACK_COUNTERS_SEC0_pack_yz_transposed, UnsupportedFunctionality, "pack_yz_transposed");
-#if TT_ARCH_VERSION == 0
-    TTSIM_VERIFY(!p_config->PACK_COUNTERS_SEC1_pack_yz_transposed, UnsupportedFunctionality, "pack_yz_transposed");
-    TTSIM_VERIFY(!p_config->PACK_COUNTERS_SEC2_pack_yz_transposed, UnsupportedFunctionality, "pack_yz_transposed");
-    TTSIM_VERIFY(!p_config->PACK_COUNTERS_SEC3_pack_yz_transposed, UnsupportedFunctionality, "pack_yz_transposed");
-#endif
     uint32_t pack_reads_per_xy_plane = p_config->PACK_COUNTERS_SEC0_pack_reads_per_xy_plane;
     TTSIM_VERIFY((pack_reads_per_xy_plane >= 1) && (pack_reads_per_xy_plane <= 16), UnsupportedFunctionality, "pack_reads_per_xy_plane=%d", pack_reads_per_xy_plane);
 #if TT_ARCH_VERSION == 0
@@ -2049,31 +2081,20 @@ TENSIX_EXECUTE_PACR() {
     TTSIM_VERIFY(p_config->THCON_SEC0_REG1_##f == val, UnsupportedFunctionality, #f)
 #endif
 #define PACK_VERIFY_THCON0(f) PACK_VERIFY_THCON(f, 0)
-    PACK_VERIFY_THCON0(Row_start_section_size);
-    PACK_VERIFY_THCON0(Dis_shared_exp_assembler);
-    PACK_VERIFY_THCON0(Enable_out_fifo);
     PACK_VERIFY_THCON(Disable_zero_compress, 1);
-    PACK_VERIFY_THCON0(Add_l1_dest_addr_offset);
+#if TT_ARCH_VERSION == 0
+    PACK_VERIFY_THCON0(Addr_cnt_context);
     PACK_VERIFY_THCON0(Sub_l1_tile_header_size);
     PACK_VERIFY_THCON0(Source_interface_selection);
-    PACK_VERIFY_THCON0(Exp_threshold_en);
     PACK_VERIFY_THCON0(Add_tile_header_size);
+    PACK_VERIFY_THCON0(L1_source_addr);
     PACK_VERIFY_THCON0(Downsample_mask);
     PACK_VERIFY_THCON0(Downsample_rate);
-#if TT_ARCH_VERSION == 0
-    PACK_VERIFY_THCON0(Force_pack_per_max_xy_plane);
-    PACK_VERIFY_THCON0(Addr_cnt_context);
     PACK_VERIFY_THCON0(Read_mode);
-#else
-    PACK_VERIFY_THCON0(Auto_set_last_pacr_intf_sel);
-    PACK_VERIFY_THCON0(pack_start_intf_pos);
 #endif
-    // XXX Disable_pack_zero_flags
-#if TT_ARCH_VERSION == 1
-    PACK_VERIFY_THCON0(pack_dis_y_pos_start_offset);
-#endif
-    PACK_VERIFY_THCON0(L1_source_addr);
+    PACK_VERIFY_THCON0(Exp_threshold_en);
     PACK_VERIFY_THCON0(Exp_threshold);
+    PACK_VERIFY_THCON0(Disable_pack_zero_flags);
 #undef PACK_VERIFY_THCON0
 
     uint32_t intermediate_format = p_config->ALU_FORMAT_SPEC_REG2_Dstacc;
@@ -2804,15 +2825,11 @@ TENSIX_EXECUTE_UNPACR() {
     }
     TTSIM_VERIFY(!(dst_addr % ROW_SIZE), UnsupportedFunctionality, "misaligned dst_addr=%d", dst_addr);
 
-    uint32_t upsample_rate = unpack_block_selection ? p_config->THCON_SEC1_REG2_Upsample_rate : p_config->THCON_SEC0_REG2_Upsample_rate;
-    bool upsample_interleave = unpack_block_selection ? p_config->THCON_SEC1_REG2_Upsample_and_interleave : p_config->THCON_SEC0_REG2_Upsample_and_interleave;
     uint32_t col_shift = 0;
     if (!tileize && !unpack_block_selection) {
         col_shift = unpack_context ? p_config->THCON_SEC0_REG2_Shift_amount_cntx1 :
                                      p_config->THCON_SEC0_REG2_Shift_amount_cntx0;
     }
-    TTSIM_VERIFY(!upsample_rate, UnsupportedFunctionality, "upsample_rate=%d", upsample_rate);
-    TTSIM_VERIFY(!upsample_interleave, UnsupportedFunctionality, "upsample_interleave=%d", upsample_interleave);
     TTSIM_VERIFY(!col_shift, UnsupportedFunctionality, "col_shift=%d", col_shift);
 
     TTSIM_VERIFY(p_addr_ctrl->ch0_x <= p_addr_ctrl->ch1_x, UnsupportedFunctionality, "invalid ch0_x=%d ch1_x=%d", p_addr_ctrl->ch0_x, p_addr_ctrl->ch1_x);
@@ -3548,9 +3565,11 @@ TENSIX_EXECUTE_SFPSTORE() {
         } else if (instr_mod0 == 3) {
             value = denormals_as_zeros(value);
             write_dst32b(p_tensix, row, col, dst_encode_fp32(value));
-        } else if (instr_mod0 == 4) {
+        } else
+        if (instr_mod0 == 4) {
             write_dst32b(p_tensix, row, col, dst_encode_fp32(value));
-        } else if ((instr_mod0 == 6) || (instr_mod0 == 14)) {
+        } else
+        if ((instr_mod0 == 6) || (instr_mod0 == 14)) {
             write_dst16b(p_tensix, row, col, value & 0xFFFF);
         } else
         if (instr_mod0 == 7) {
@@ -4327,10 +4346,6 @@ TENSIX_EXECUTE_SFPSWAP() {
 
     uint32_t mask = p_tensix->cc_en ? p_tensix->cc : 0xFFFFFFFF;
     uint32_t lane_config = p_tensix->lane_config;
-    if (lane_config & 4) {
-        TTSIM_VERIFY(lreg_c < 4, UnsupportedFunctionality, "ENABLE_DEST_INDEX: lreg_c=%d", lreg_c);
-        TTSIM_VERIFY(lreg_dest < 4, UnsupportedFunctionality, "ENABLE_DEST_INDEX: lreg_dest=%d", lreg_dest);
-    }
     for_each_lane(mask, [=](uint32_t lane) {
         uint32_t c = p_tensix->l_regs[lreg_c][lane];
         uint32_t d = p_tensix->l_regs[lreg_dest][lane];
@@ -4348,10 +4363,14 @@ TENSIX_EXECUTE_SFPSWAP() {
         }
         if (should_swap) {
             if (lane_config & 4) {
-                p_tensix->l_regs[lreg_c][lane] = d;
-                p_tensix->l_regs[lreg_dest][lane] = c;
-                uint32_t vc_a = 4 + lreg_c;
-                uint32_t vd_a = 4 + lreg_dest;
+                if (lreg_c < 4) {
+                    p_tensix->l_regs[lreg_c][lane] = d;
+                }
+                if (lreg_dest < 4) {
+                    p_tensix->l_regs[lreg_dest][lane] = c;
+                }
+                uint32_t vc_a = 4 + (lreg_c & 3);
+                uint32_t vd_a = 4 + (lreg_dest & 3);
                 std::swap(p_tensix->l_regs[vc_a][lane], p_tensix->l_regs[vd_a][lane]);
             } else {
                 if (lreg_c < 8) {

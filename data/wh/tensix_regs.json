@@ -1020,6 +1020,7 @@
    {
     "shift": 1,
     "size": 1,
+    "unsupported": true,
     "name": "ALU_ACC_CTRL_Zero_Flag_disabled_dst"
    },
    {
@@ -1040,26 +1041,31 @@
    {
     "shift": 23,
     "size": 3,
+    "unsupported": true,
     "name": "DISABLE_RISC_BP_Disable_trisc"
    },
    {
     "shift": 26,
     "size": 1,
+    "unsupported": true,
     "name": "DISABLE_RISC_BP_Disable_ncrisc"
    },
    {
     "shift": 27,
     "size": 1,
+    "unsupported": true,
     "name": "DISABLE_RISC_BP_Disable_bmp_clear_main"
    },
    {
     "shift": 28,
     "size": 3,
+    "unsupported": true,
     "name": "DISABLE_RISC_BP_Disable_bmp_clear_trisc"
    },
    {
     "shift": 31,
     "size": 1,
+    "unsupported": true,
     "name": "DISABLE_RISC_BP_Disable_bmp_clear_ncrisc"
    }
   ],
@@ -1337,6 +1343,7 @@
    {
     "shift": 0,
     "size": 8,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC0_pack_per_xy_plane"
    },
    {
@@ -1347,16 +1354,19 @@
    {
     "shift": 16,
     "size": 7,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC0_pack_xys_per_tile"
    },
    {
     "shift": 23,
     "size": 1,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC0_pack_yz_transposed"
    },
    {
     "shift": 24,
     "size": 8,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC0_pack_per_xy_plane_offset"
    }
   ],
@@ -1364,6 +1374,7 @@
    {
     "shift": 0,
     "size": 8,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC1_pack_per_xy_plane"
    },
    {
@@ -1374,16 +1385,19 @@
    {
     "shift": 16,
     "size": 7,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC1_pack_xys_per_tile"
    },
    {
     "shift": 23,
     "size": 1,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC1_pack_yz_transposed"
    },
    {
     "shift": 24,
     "size": 8,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC1_pack_per_xy_plane_offset"
    }
   ],
@@ -1391,6 +1405,7 @@
    {
     "shift": 0,
     "size": 8,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC2_pack_per_xy_plane"
    },
    {
@@ -1401,16 +1416,19 @@
    {
     "shift": 16,
     "size": 7,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC2_pack_xys_per_tile"
    },
    {
     "shift": 23,
     "size": 1,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC2_pack_yz_transposed"
    },
    {
     "shift": 24,
     "size": 8,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC2_pack_per_xy_plane_offset"
    }
   ],
@@ -1418,6 +1436,7 @@
    {
     "shift": 0,
     "size": 8,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC3_pack_per_xy_plane"
    },
    {
@@ -1428,16 +1447,19 @@
    {
     "shift": 16,
     "size": 7,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC3_pack_xys_per_tile"
    },
    {
     "shift": 23,
     "size": 1,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC3_pack_yz_transposed"
    },
    {
     "shift": 24,
     "size": 8,
+    "unsupported": true,
     "name": "PACK_COUNTERS_SEC3_pack_per_xy_plane_offset"
    }
   ],
@@ -1457,6 +1479,7 @@
    {
     "shift": 0,
     "size": 12,
+    "unsupported": true,
     "name": "UNP0_ADDR_CTRL_XY_REG_1_Xstride"
    },
    {
@@ -1481,6 +1504,7 @@
    {
     "shift": 0,
     "size": 12,
+    "unsupported": true,
     "name": "UNP1_ADDR_CTRL_XY_REG_1_Xstride"
    },
    {
@@ -1510,6 +1534,7 @@
    {
     "shift": 8,
     "size": 1,
+    "unsupported": true,
     "name": "UNP1_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr"
    }
   ],
@@ -1524,6 +1549,7 @@
    {
     "shift": 0,
     "size": 16,
+    "unsupported": true,
     "name": "THCON_SEC0_REG1_Row_start_section_size"
    },
    {
@@ -1548,6 +1574,7 @@
    {
     "shift": 1,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC0_REG1_Add_l1_dest_addr_offset"
    },
    {
@@ -1568,16 +1595,19 @@
    {
     "shift": 12,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC0_REG1_Dis_shared_exp_assembler"
    },
    {
     "shift": 13,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC0_REG1_Force_pack_per_max_xy_plane"
    },
    {
     "shift": 14,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC0_REG1_Enable_out_fifo"
    },
    {
@@ -1664,6 +1694,7 @@
    {
     "shift": 6,
     "size": 2,
+    "unsupported": true,
     "name": "THCON_SEC0_REG2_Context_count"
    },
    {
@@ -1690,6 +1721,7 @@
    {
     "shift": 12,
     "size": 2,
+    "unsupported": true,
     "name": "THCON_SEC0_REG2_Upsample_rate"
    },
    {
@@ -1700,6 +1732,7 @@
    {
     "shift": 15,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC0_REG2_Upsample_and_interleave"
    },
    {
@@ -1920,6 +1953,7 @@
    {
     "shift": 0,
     "size": 16,
+    "unsupported": true,
     "name": "THCON_SEC0_REG8_Row_start_section_size"
    },
    {
@@ -1944,6 +1978,7 @@
    {
     "shift": 1,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC0_REG8_Add_l1_dest_addr_offset"
    },
    {
@@ -1964,16 +1999,19 @@
    {
     "shift": 12,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC0_REG8_Dis_shared_exp_assembler"
    },
    {
     "shift": 13,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC0_REG8_Force_pack_per_max_xy_plane"
    },
    {
     "shift": 14,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC0_REG8_Enable_out_fifo"
    },
    {
@@ -2045,6 +2083,7 @@
    {
     "shift": 0,
     "size": 16,
+    "unsupported": true,
     "name": "THCON_SEC1_REG1_Row_start_section_size"
    },
    {
@@ -2069,6 +2108,7 @@
    {
     "shift": 1,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC1_REG1_Add_l1_dest_addr_offset"
    },
    {
@@ -2089,16 +2129,19 @@
    {
     "shift": 12,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC1_REG1_Dis_shared_exp_assembler"
    },
    {
     "shift": 13,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC1_REG1_Force_pack_per_max_xy_plane"
    },
    {
     "shift": 14,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC1_REG1_Enable_out_fifo"
    },
    {
@@ -2185,6 +2228,7 @@
    {
     "shift": 6,
     "size": 2,
+    "unsupported": true,
     "name": "THCON_SEC1_REG2_Context_count"
    },
    {
@@ -2211,6 +2255,7 @@
    {
     "shift": 12,
     "size": 2,
+    "unsupported": true,
     "name": "THCON_SEC1_REG2_Upsample_rate"
    },
    {
@@ -2221,6 +2266,7 @@
    {
     "shift": 15,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC1_REG2_Upsample_and_interleave"
    },
    {
@@ -2419,6 +2465,7 @@
    {
     "shift": 0,
     "size": 16,
+    "unsupported": true,
     "name": "THCON_SEC1_REG8_Row_start_section_size"
    },
    {
@@ -2443,6 +2490,7 @@
    {
     "shift": 1,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC1_REG8_Add_l1_dest_addr_offset"
    },
    {
@@ -2463,16 +2511,19 @@
    {
     "shift": 12,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC1_REG8_Dis_shared_exp_assembler"
    },
    {
     "shift": 13,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC1_REG8_Force_pack_per_max_xy_plane"
    },
    {
     "shift": 14,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC1_REG8_Enable_out_fifo"
    },
    {

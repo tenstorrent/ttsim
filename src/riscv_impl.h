@@ -42,8 +42,8 @@
 
 using int_xlen_t = int_types<XLEN>::int_t;
 using uint_xlen_t = int_types<XLEN>::uint_t;
-using int_2_times_xlen_t = int_types<2*XLEN>::int_t;
-using uint_2_times_xlen_t = int_types<2*XLEN>::uint_t;
+using int_2_times_xlen_t = int_types<2 * XLEN>::int_t;
+using uint_2_times_xlen_t = int_types<2 * XLEN>::uint_t;
 
 #if XLEN == 64
 static
@@ -67,6 +67,8 @@ void RV_XLEN_PREFIX(init)(RiscvHartState *p_hart, char tile_type, uint32_t tile_
 #if XLEN == 64
     p_hart->riscv_id |= 0x80000000; // so that fabrics can distinguish type of core initiating request
     p_hart->mstatus = 3ull << 11; // MPP=3, most other bits not relevant with U/S/H unsupported
+#elif TT_ARCH_VERSION >= 1
+    p_hart->chicken_bits = 0x20000; // StMergeTimer=16
 #endif
 
     if (tile_type == 'T') {
@@ -641,15 +643,22 @@ template<class T> static bool RV_XLEN_PREFIX(mem_rd)(RiscvHartState *p_hart, uin
     }
 #endif
     if constexpr (size == 1) {
-        TTSIM_ERROR(UntestedFunctionality, "8-bit MMIO read");
+#if TT_ARCH_VERSION == 0
+        TTSIM_ERROR(UnsupportedFunctionality, "8-bit MMIO loads do not work on all device apertures");
+#else
+        TTSIM_ERROR(UntestedFunctionality, "8-bit MMIO load");
         auto [done, data] = tile_mmio_rd32(p_hart->tile_type, p_hart->tile_id, p_hart->riscv_id, addr & ~uint_xlen_t(3));
         *p_data = (data >> (8 * (addr & 3))) & 0xFF;
         return done;
+#endif
     } else if constexpr (size == 2) {
-        TTSIM_ERROR(UntestedFunctionality, "16-bit MMIO read");
+#if TT_ARCH_VERSION == 0
+        TTSIM_ERROR(UnsupportedFunctionality, "16-bit MMIO loads do not work on all device apertures");
+#else
         auto [done, data] = tile_mmio_rd32(p_hart->tile_type, p_hart->tile_id, p_hart->riscv_id, addr & ~uint_xlen_t(3));
         *p_data = (data >> (8 * (addr & 3))) & 0xFFFF;
         return done;
+#endif
     } else if constexpr (size == 4) {
         auto [done, data] = tile_mmio_rd32(p_hart->tile_type, p_hart->tile_id, p_hart->riscv_id, addr);
         *p_data = data;
@@ -685,13 +694,24 @@ template<class T> static bool RV_XLEN_PREFIX(mem_wr)(RiscvHartState *p_hart, uin
         return true;
     }
 #endif
-    if constexpr (size == 4) {
+    if constexpr (size == 1) {
+#if TT_ARCH_VERSION == 0
+        TTSIM_ERROR(UnsupportedFunctionality, "8-bit MMIO stores write the entire 32-bit register, not just the addressed byte");
+#else
+        TTSIM_ERROR(UnsupportedFunctionality, "8-bit MMIO store");
+#endif
+    } else if constexpr (size == 2) {
+#if TT_ARCH_VERSION == 0
+        TTSIM_ERROR(UnsupportedFunctionality, "16-bit MMIO stores write the entire 32-bit register, not just the addressed halfword");
+#else
+        TTSIM_ERROR(UnsupportedFunctionality, "16-bit MMIO store");
+#endif
+    } else if constexpr (size == 4) {
         return tile_mmio_wr32(p_hart->tile_type, p_hart->tile_id, p_hart->riscv_id, addr, data);
-    }
-    if constexpr (size == 8) {
+    } else {
+        static_assert(size == 8);
         return tile_mmio_wr64(p_hart->tile_type, p_hart->tile_id, p_hart->riscv_id, addr, data);
     }
-    TTSIM_ERROR(UnsupportedFunctionality, "addr=0x%llx size=%d", uint64_t(addr), size);
 #endif
 }
 
@@ -1116,8 +1136,7 @@ static void RV_XLEN_PREFIX(ecall_ebreak)(RiscvHartState *p_hart, uint32_t inst) 
     }
 #else
     if (inst == 0x73) {
-        p_hart->x_regs[10] = libttsim_syscall(p_hart->tile_type, p_hart->tile_id, p_hart->riscv_id,
-            p_hart->x_regs[17], p_hart->x_regs[10], p_hart->x_regs[11], p_hart->x_regs[12]);
+        TTSIM_ERROR(UnimplementedFunctionality, "ecall");
 #if XLEN == 64
     } else if (inst == 0xFC000073) {
         // tt.cache.cflush.d.l1 zero -- writes back and invalidates entire L1 D$ (src reg in bits 19:15)
@@ -1170,9 +1189,9 @@ static void write_csr(RiscvHartState *p_hart, uint32_t csr, uint_xlen_t data) {
 #else
         case CSR_CFG0:
 #if TT_ARCH_VERSION == 1
-            TTSIM_VERIFY(!(data & ~0x104000A), UnsupportedFunctionality, "chicken_bits: data=0x%x", data);
+            TTSIM_VERIFY(!(data & ~0x106000A), UnsupportedFunctionality, "chicken_bits: data=0x%x", data);
 #else
-            TTSIM_VERIFY(!(data & ~0x40009), UnimplementedFunctionality, "chicken_bits: data=0x%x", data);
+            TTSIM_VERIFY(!(data & ~0x60009), UnimplementedFunctionality, "chicken_bits: data=0x%x", data);
 #endif
             p_hart->chicken_bits = data;
             break;
@@ -1340,7 +1359,6 @@ static void RV_XLEN_PREFIX(csrrsi)(RiscvHartState *p_hart, uint32_t inst) {
     uint32_t imm = bits<19,15>(inst);
     rv64_csr_op(p_hart, inst, imm, imm != 0, 1);
 #else
-    TTSIM_ERROR_NOFMT(UntestedFunctionality);
     uint32_t r_dst = bits<11,7>(inst);
     uint32_t imm = bits<19,15>(inst);
     uint32_t csr = bits<31,20>(inst);

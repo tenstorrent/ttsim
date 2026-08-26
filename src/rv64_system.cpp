@@ -247,10 +247,6 @@ static inline void rv64_normalize_mstatus(uint64_t *mstatus) {
     }
 }
 
-[[maybe_unused]] static inline uint64_t cyc_mtime_now(const RvSystem *p_sys) {
-    return (p_sys->visible_icount - p_sys->cause12_count) / p_sys->timer_insns_per_tick;
-}
-
 static inline uint64_t mtime_now(const RvSystem *p_sys) {
     return p_sys->visible_icount / p_sys->timer_insns_per_tick;
 }

@@ -67,7 +67,6 @@
 #endif
 
 static bool s_ttsim_running = false;
-static bool s_ttsim_semihosting = false;
 static void (*s_pfn_libttsim_pci_dma_mem_rd_bytes)(uint64_t paddr, void *p, uint32_t size);
 static void (*s_pfn_libttsim_pci_dma_mem_wr_bytes)(uint64_t paddr, const void *p, uint32_t size);
 
@@ -156,11 +155,6 @@ static uint32_t *iatu_reg_field(uint32_t offset) {
 
 extern "C" API_EXPORT void libttsim_init() {
     TTSIM_VERIFY(!s_ttsim_running, ConfigurationError, "sim is already running");
-    if (char *s = getenv("TTSIM_SEMIHOSTING")) {
-        TTSIM_VERIFY(!strcmp(s, "1"), ConfigurationError, "TTSIM_SEMIHOSTING must be set to 1");
-        s_ttsim_semihosting = true;
-        TTSIM_ERROR(UnsupportedFunctionality, "TTSIM_SEMIHOSTING is deprecated and unsupported");
-    }
     ttsim_init();
     for (uint32_t d = 0; d < NUM_MMIO_CHIPS; d++) {
         // Each MMIO device's BARs live in its own host-physical window (see PER_DEVICE_PADDR_STRIDE).
@@ -834,74 +828,4 @@ extern "C" API_EXPORT void libttsim_clock(uint32_t n_clocks) {
 #if NUM_CHIPS > 1
     ttsim_select_chip(saved_chip_id);
 #endif
-}
-
-// Simplified read/write APIs for semihosting -- not fully general support for the address map
-static uint8_t syscall_mem_rd(uint32_t tile_id, uint32_t riscv_id, uint64_t addr) {
-    if (addr < sizeof(g_t_tiles[tile_id].sram)) {
-        return g_t_tiles[tile_id].sram[addr];
-    } else if (!(riscv_id & 0x80000000) && (addr >= RISCV_LOCAL_MEM_BASE) && (addr < RISCV_LOCAL_MEM_BASE + 0x1000)) {
-        return g_t_tiles[tile_id].rv32_local_ram[0][addr - RISCV_LOCAL_MEM_BASE];
-    } else {
-        TTSIM_ERROR(UnimplementedFunctionality, "addr=0x%llx", addr);
-    }
-}
-
-static void syscall_mem_wr(uint32_t tile_id, uint32_t riscv_id, uint64_t addr, uint8_t data) {
-    if (addr < sizeof(g_t_tiles[tile_id].sram)) {
-        g_t_tiles[tile_id].sram[addr] = data;
-    } else if (!(riscv_id & 0x80000000) && (addr >= RISCV_LOCAL_MEM_BASE) && (addr < RISCV_LOCAL_MEM_BASE + 0x1000)) {
-        g_t_tiles[tile_id].rv32_local_ram[0][addr - RISCV_LOCAL_MEM_BASE] = data;
-    } else {
-        TTSIM_ERROR(UnimplementedFunctionality, "addr=0x%llx", addr);
-    }
-}
-
-static uint64_t sys_close(uint32_t tile_id, uint32_t riscv_id, uint64_t fd) {
-    TTSIM_VERIFY(fd <= 2, UnimplementedFunctionality, "fd=%lld", fd); // only support std[in,out,err] and ignore attempts to close them for now
-    return 0;
-}
-
-static uint64_t sys_write(uint32_t tile_id, uint32_t riscv_id, uint64_t fd, uint64_t buf, uint64_t count) {
-    TTSIM_VERIFY((fd == 1) || (fd == 2), UnimplementedFunctionality, "fd=%lld", fd);
-    FILE *f = (fd == 1) ? stdout : stderr;
-    for (uint32_t i = 0; i < count; i++) {
-        uint8_t byte = syscall_mem_rd(tile_id, riscv_id, buf + i);
-        fwrite(&byte, 1, 1, f);
-    }
-    return count;
-}
-
-static uint64_t sys_fstat(uint32_t tile_id, uint32_t riscv_id, uint64_t fd, uint64_t p_statbuf) {
-    TTSIM_VERIFY(fd == 1, UnimplementedFunctionality, "fd=%lld", fd);
-    for (uint32_t offset = 0; offset < 112; offset++) {
-        syscall_mem_wr(tile_id, riscv_id, p_statbuf + offset, 0);
-    }
-    return 0;
-}
-
-static uint64_t sys_exit(uint32_t tile_id, uint32_t riscv_id, uint64_t status) {
-    TTSIM_VERIFY(status <= 255, UndefinedBehavior, "exit(%lld)", status);
-    // note that we skip ttsim_exit() here, so that semihosting apps don't print anything extra to the console
-    // XXX may eventually need a way to dump stats here w/o heartbeat
-    _Exit(status);
-}
-
-static uint64_t sys_brk(uint32_t tile_id, uint32_t riscv_id, uint64_t addr) {
-    return 0; // no heap support yet: return 0 unconditionally to indicate no heap is available
-}
-
-// see libgloss/riscv/machine/syscall.h in newlib
-uint64_t libttsim_syscall(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_t syscall, uint64_t arg0, uint64_t arg1, uint64_t arg2) {
-    TTSIM_VERIFY(s_ttsim_semihosting, ConfigurationError, "semihosting is not enabled");
-    TTSIM_VERIFY(tile_type == 'T', UnsupportedFunctionality, "tile_type=%c", tile_type);
-    TTSIM_VERIFY((riscv_id == 0) || (riscv_id == 0x80000000), UnsupportedFunctionality, "riscv_id=0x%x", riscv_id);
-    switch (syscall) {
-        case 57: return sys_close(tile_id, riscv_id, arg0);
-        case 64: return sys_write(tile_id, riscv_id, arg0, arg1, arg2);
-        case 80: return sys_fstat(tile_id, riscv_id, arg0, arg1);
-        case 93: return sys_exit(tile_id, riscv_id, arg0);
-        case 214: return sys_brk(tile_id, riscv_id, arg0);
-        default: TTSIM_ERROR(UnimplementedFunctionality, "syscall=%lld", syscall);
-    }
 }

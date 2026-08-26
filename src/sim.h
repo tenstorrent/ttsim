@@ -561,7 +561,6 @@ extern ChipState g_chips[NUM_CHIPS];
 
 void libttsim_pci_dma_mem_rd_bytes(uint64_t paddr, void *p, uint32_t size);
 void libttsim_pci_dma_mem_wr_bytes(uint64_t paddr, const void *p, uint32_t size);
-uint64_t libttsim_syscall(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_t syscall, uint64_t arg0, uint64_t arg1, uint64_t arg2);
 
 void ttsim_init();
 void ttsim_exit();
@@ -582,6 +581,7 @@ bool tensix_can_push_inst(TensixState *p_tensix, uint32_t pipe);
 void tensix_push_inst(TensixState *p_tensix, uint32_t pipe, uint32_t inst, bool bypass_mop_expander);
 uint32_t tensix_cfg_rd32(TensixState *p_tensix, uint32_t bank, uint32_t offset);
 void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint32_t data);
+uint32_t tensix_dst_rd32(TensixState *p_tensix, uint32_t pipe, uint32_t offset);
 bool tensix_decode_and_execute(TensixState *p_tensix, uint32_t pipe, uint32_t inst);
 
 void t_tile_init(uint32_t tile_id);
