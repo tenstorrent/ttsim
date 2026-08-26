@@ -123,10 +123,9 @@ follow the staged policy below.
 
 Beyond the exported functions, anything observable about how the library interacts with its host
 process is part of the contract. The library is designed to be a well-behaved guest inside a host
-process, with the explicit exception of semihosting (below).
+process.
 
-- **Environment variables.** The library reads exactly one variable: `TTSIM_SEMIHOSTING`. If set,
-  its value must be `1`, which enables semihosting (see below). No other environment variable
+- **Environment variables.** The library reads no environment variables; nothing in the environment
   affects `libttsim.so`. (Variables such as `TT_METAL_SIMULATOR` are read by tt-metal, not by this
   library.) Any environment variable the library consults is part of this contract.
 - **Threads.** The library is single-threaded and creates no threads of its own. All work happens
@@ -136,8 +135,8 @@ process, with the explicit exception of semihosting (below).
   (`libttsim_clock`, the access functions) allocates nothing and frees nothing.
 - **Signals.** The library installs no signal handlers and does not alter the host's signal
   disposition.
-- **I/O.** In normal operation the library performs no file or network I/O. It writes diagnostic
-  text to stdout/stderr; it does not open files, sockets, or devices.
+- **I/O.** The library performs no file or network I/O. It writes diagnostic text to stdout/stderr;
+  it does not open files, sockets, or devices.
 - **Exceptions.** The library is compiled without C++ exception support and never throws. No
   exception will ever propagate out of an entry point; the only failure mode is the fatal-error
   path described below.
@@ -149,22 +148,6 @@ process, with the explicit exception of semihosting (below).
   disallow runtime code generation at the kernel or runtime level (e.g. hardened or locked-down
   hosts).
 
-### Semihosting (deliberate exception)
-
-**NOTE: semihosting is deprecated and will be removed in a future simulator release.**
-
-When `TTSIM_SEMIHOSTING=1`, a program running on the simulated RISC-V cores may make semihosting
-calls that the library services on the host's behalf while inside `libttsim_clock`. This is an
-intentional escape hatch for running bare-metal test programs, and the "well-behaved guest"
-properties above are **relaxed by design** in this mode:
-
-- A semihosting program-exit call terminates the host process (see below).
-- Semihosting is expected to grow over time and may, in the future, perform real file I/O or other
-  host operations on behalf of the simulated program.
-
-Hosts that require the library to never affect their process or environment should not enable
-semihosting.
-
 ### Error and exit behavior
 
 The library treats contract violations and unsupported conditions as **fatal**: it prints a
@@ -172,8 +155,7 @@ structured error message and terminates the entire host process via `_Exit` (see
 [Simulator Error Handling](sim_error_handling.md)). An embedder cannot catch or recover from these;
 the simulator does not return error codes for them and does not throw. This is intentional and is
 part of the contract: a host embedding `libttsim.so` must be prepared for any call to terminate the
-process on a detected violation. Separately, when semihosting is enabled, a program-exit semihosting
-call also exits the host process, with the program's exit status.
+process on a detected violation.
 
 ### Forking
 
@@ -190,12 +172,6 @@ do not affect other test cases or prevent them from running.
 Fork at a quiescent point, i.e. when no `libttsim` call is in progress (which, for the single-threaded
 library, simply means not from inside a DMA callback). Parent and child are then fully independent
 simulators.
-
-This should be avoided when semihosting is enabled. Copy-on-write isolates the simulator's memory, but
-it does not isolate the host-side side effects semihosting performs on the program's behalf (process
-exit today, potentially file I/O and other host operations in the future); parallel forked children
-running semihosting would have those effects collide or duplicate. Use a non-fork strategy if you need
-semihosting across parallel simulations.
 
 ## ABI
 
@@ -258,9 +234,9 @@ The following require the staged lead-time treatment above:
   or making the library something other than a single-threaded, caller-serialized singleton.
 - Changing the process model in a way a host must account for (e.g. the singleton or once-only
   `libttsim_init` semantics).
-- Changing the host-process guarantees in normal (non-semihosting) operation - e.g. beginning to
-  perform file or network I/O, installing signal handlers, allocating memory after `libttsim_init`
-  returns, loading code via `dlopen`, or generating or self-modifying executable code (JIT).
+- Changing the host-process guarantees - e.g. beginning to perform file or network I/O, installing
+  signal handlers, allocating memory after `libttsim_init` returns, loading code via `dlopen`, or
+  generating or self-modifying executable code (JIT).
 - Changing the documented meaning of an environment variable the library reads.
 - Adding a new mandatory runtime dependency, or dropping support for a currently supported CI
   platform.
@@ -272,7 +248,6 @@ These may happen at any time without notice:
 - Accepting an input (e.g. a config-space offset or BAR address) that previously failed.
 - Internal behavior, performance, or implementation changes that preserve the documented semantics
   and bit-exact results.
-- Expansion of semihosting behavior (which is opt-in via `TTSIM_SEMIHOSTING`).
 
 Adding a new exported symbol or a new optional environment variable is not a breaking change, but
 as any new API is a long-term support commitment, the bar for adding one is high.
