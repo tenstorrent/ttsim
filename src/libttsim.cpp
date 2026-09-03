@@ -243,25 +243,6 @@ static uint32_t pci_device_from_bdf(uint32_t bus_device_function) {
     if (function) {
         return NUM_MMIO_CHIPS; // single-function endpoints; functions 1-7 are absent
     }
-#if TT_ARCH_VERSION == 1
-#if NUM_CHIPS == 32
-    // The simulated chip numbering follows the 8x4 torus wiring in topology.h. Map each
-    // chip's position onto the BH Galaxy PGD tray/ASIC grid. The high nibble is the
-    // tray's enumerated PCI bus and the low nibble is the 1-based ASIC/device slot.
-    static constexpr uint8_t BUS_DEVICE[NUM_MMIO_CHIPS] = {
-        0x01, 0x02, 0x03, 0x04, 0xC1, 0xC2, 0xC3, 0xC4,
-        0x05, 0x06, 0x07, 0x08, 0xC5, 0xC6, 0xC7, 0xC8,
-        0x45, 0x46, 0x47, 0x48, 0x85, 0x86, 0x87, 0x88,
-        0x41, 0x42, 0x43, 0x44, 0x81, 0x82, 0x83, 0x84,
-    };
-    for (uint32_t device = 0; device < NUM_MMIO_CHIPS; device++) {
-        if ((bus == (BUS_DEVICE[device] & 0xF0)) && (bdf_device == (BUS_DEVICE[device] & 0x0F))) {
-            return device;
-        }
-    }
-    return NUM_MMIO_CHIPS;
-#endif
-#endif
     return (bus == 0 && (bdf_device < NUM_MMIO_CHIPS)) ? bdf_device : NUM_MMIO_CHIPS;
 }
 
