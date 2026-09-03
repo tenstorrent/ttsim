@@ -69,19 +69,18 @@ uint32_t libttsim_pci_config_rd32(uint32_t bus_device_function, uint32_t offset)
 void     libttsim_pci_config_wr32(uint32_t bus_device_function, uint32_t offset, uint32_t data);
 ```
 
-32-bit PCI configuration-space access. `bus_device_function` is the conventional PCI bus/device/function
-tuple; the bus and function fields must be 0, and the device field selects which host-visible chip is
-addressed. A single-chip build exposes only device 0. A multi-chip build exposes each host-visible chip
-as a consecutive device number, and reading the config space of a device number beyond the last present
-chip returns all-ones (`0xFFFFFFFF`) - the conventional "no device" response - so a host can enumerate
-the chips by walking device numbers until it reads all-ones.
+32-bit PCI configuration-space access. `bus_device_function` is the conventional 16-bit PCI tuple;
+bits above bit 15 are a fatal error. Endpoints are single-function, and an empty slot or a non-zero
+function reads all-ones (`0xFFFFFFFF`). Endpoints are not necessarily contiguous - the Blackhole
+Galaxy build places its 32 at sparse locations matching the chips' physical tray and ASIC slots - so
+a host must probe every bus/device slot rather than stop at the first all-ones.
 
 `offset` must be 4-byte aligned; other values are fatal errors. The config read at offset 0 returns
 the vendor and device ID identifying the simulated chip; the BAR base-address registers are also
 readable, and each device's BARs occupy a distinct physical-address window (so the `paddr` passed
-to the memory-access functions identifies the target chip). `libttsim_pci_config_wr32` is reserved:
-it is part of the ABI but config-space writes are not currently implemented and calling it is a
-fatal error.
+to the memory-access functions identifies the target chip). `libttsim_pci_config_wr32` implements the
+writable registers (command/status, BARs) on Wormhole and Blackhole; writing an unimplemented offset,
+or a BDF holding no endpoint, is a fatal error.
 
 ### Memory (BAR) access
 
