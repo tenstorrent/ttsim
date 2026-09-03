@@ -57,10 +57,10 @@ static constexpr uint32_t logical_harvesting_mask(uint32_t chip_id) {
     constexpr uint32_t LOGICAL_HARVESTING_MASKS[NUM_CHIPS] = {}; // LoudBox P150
 #elif NUM_CHIPS == 32
     constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {
-        0x100,  0x2,   0x10,  0x1,   0x200,  0x800, 0x4,   0x80,
-        0x2000, 0x10,  0x8,   0x10,  0x2000, 0x10,  0x40,  0x200,
-        0x40,   0x800, 0x100, 0x20,  0x80,   0x10,  0x1,   0x8,
-        0x400,  0x2,   0x4,   0x4,   0x800,  0x20,  0x800, 0x1}; // BH Galaxy
+        0x40,  0x80, 0x200,  0x2000, 0x20,   0x20,  0x4,   0x1,
+        0x8,   0x1,  0x800,  0x2,    0x20,   0x200, 0x800, 0x8,
+        0x2,   0x4,  0x20,   0x2,    0x1000, 0x40,  0x200, 0x20,
+        0x100, 0x10, 0x2000, 0x4,    0x80,   0x100, 0x100, 0x20}; // BH Galaxy
 #else
 #error unsupported Blackhole topology
 #endif
@@ -920,14 +920,12 @@ static inline void set_bits(uint32_t *array, uint32_t n_words, uint32_t shift, u
     }
 }
 
-static uint32_t debug_bus_rd_data(const TensixTile *p_tile) {
-    uint32_t ctrl = p_tile->dbg_bus_ctrl;
+static uint32_t debug_bus_rd_data(const TensixState *p_tensix, uint32_t ctrl) {
     TTSIM_VERIFY((bits<29,29>(ctrl)), UnsupportedFunctionality, "DBG_BUS_CTRL must be enabled");
     uint32_t signal_sel = bits<15,0>(ctrl);
     uint32_t daisy_sel = bits<23,16>(ctrl);
     uint32_t read32_sel = bits<26,25>(ctrl);
 
-    const TensixState *p_tensix = &p_tile->tensix[0];
     uint32_t data[4] = {0};
     if (daisy_sel == 6) {
         if (signal_sel <= 5) { // ADCs
@@ -1024,24 +1022,12 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
         case RISCV_DEBUG_REGS_DBG_ARRAY_RD_DATA:
             if constexpr (tile_type == 'T') {
                 TTSIM_VERIFY(p_tile->dbg_array_rd_en, UnsupportedFunctionality, "DBG_ARRAY_RD_DATA when DBG_ARRAY_RD_EN=0");
-                uint32_t row = bits<11,0>(p_tile->dbg_array_rd_cmd);
-                uint32_t sel = bits<15,12>(p_tile->dbg_array_rd_cmd);
-                uint32_t upper = bits<31,16>(p_tile->dbg_array_rd_cmd);
-                TTSIM_VERIFY(row < DST_ROWS, UnsupportedFunctionality, "DBG_ARRAY_RD_CMD: row=%d", row);
-                TTSIM_VERIFY(sel < 8, UnsupportedFunctionality, "DBG_ARRAY_RD_CMD: sel=%d", sel);
-                TTSIM_VERIFY(upper == 2, MissingSpecification, "DBG_ARRAY_RD_CMD: upper=0x%x", upper);
-                // Note: BH does not appear to apply this condition in most cases, though in some cases
-                // it will pick up carried state from a previous packer instruction (not modeled here)
-                if ((TT_ARCH_VERSION == 1) || p_tile->tensix[0].dst_row_valid[row]) {
-                    return p_tile->tensix[0].dst[row][2*sel] | (uint32_t(p_tile->tensix[0].dst[row][2*sel + 1]) << 16);
-                } else {
-                    return 0;
-                }
+                return tensix_debug_array_rd32(&p_tile->tensix[0], p_tile->dbg_array_rd_cmd);
             }
             TTSIM_ERROR(UnsupportedFunctionality, "DBG_ARRAY_RD_DATA in eth tile");
         case RISCV_DEBUG_REGS_DBG_RD_DATA:
             if constexpr (tile_type == 'T') {
-                return debug_bus_rd_data(p_tile);
+                return debug_bus_rd_data(&p_tile->tensix[0], p_tile->dbg_bus_ctrl);
             }
             TTSIM_ERROR(UnsupportedFunctionality, "DBG_RD_DATA in eth tile");
         case RISCV_DEBUG_REGS_DBG_INSTRN_BUF_STATUS: TTSIM_ERROR(UnimplementedFunctionality, "DBG_INSTRN_BUF_STATUS");
@@ -1089,6 +1075,15 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
 static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t offset, uint32_t data) {
     TensixTile *p_tile = &g_t_tiles[tile_id];
     switch (offset) {
+        case RISCV_DEBUG_REGS_CG_CTRL_HYST0:
+            TTSIM_VERIFY(!(data & 0x80808080), UnsupportedFunctionality, "cg_ctrl_hyst0=0x%x", data);
+            break;
+        case RISCV_DEBUG_REGS_CG_CTRL_HYST1:
+            TTSIM_VERIFY(!(data & 0x80808080), UnsupportedFunctionality, "cg_ctrl_hyst1=0x%x", data);
+            break;
+        case RISCV_DEBUG_REGS_CG_CTRL_HYST2:
+            TTSIM_VERIFY(!(data & 0x80808080), UnsupportedFunctionality, "cg_ctrl_hyst2=0x%x", data);
+            break;
         case RISCV_DEBUG_REGS_DBG_BUS_CTRL:
             TTSIM_VERIFY(!(data & 0xD9000000), UnsupportedFunctionality, "reserved bit set in DBG_BUS_CTRL=0x%x", data);
             p_tile->dbg_bus_ctrl = data;
@@ -1150,6 +1145,9 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
         case RISCV_DEBUG_REGS_NCRISC_RESET_PC: p_tile->ncrisc_reset_pc = data; break;
         case RISCV_DEBUG_REGS_NCRISC_RESET_PC_OVERRIDE: p_tile->ncrisc_reset_pc_override = data; break;
         case RISCV_DEBUG_REGS_DEST_CG_CTRL: break;
+        case RISCV_DEBUG_REGS_CG_CTRL_EN:
+            TTSIM_VERIFY(!(data & ~0x1FFFF), UnsupportedFunctionality, "cg_ctrl_en=0x%x", data);
+            break;
 #endif
         RISCV_DEBUG_REGS_WR_DEFAULT_CASES()
         default: TTSIM_ERROR(UndefinedBehavior, "offset=0x%x", offset);
@@ -1761,6 +1759,9 @@ static uint32_t noc_overlay_rd32(uint32_t tile_id, uint32_t offset) {
         case NOC_OVERLAY_STREAM_REMOTE_SRC: return p_tile->overlay_stream_remote_src[stream];
         case NOC_OVERLAY_STREAM_REMOTE_DEST_BUF_START: return p_tile->overlay_stream_remote_dest_buf_start[stream];
         case NOC_OVERLAY_STREAM_REMOTE_DEST_BUF_SIZE: return p_tile->overlay_stream_remote_dest_buf_size[stream];
+        case NOC_OVERLAY_STREAM_PERF_CONFIG:
+            TTSIM_VERIFY(!stream, UnsupportedFunctionality, "perf_config: stream=%d", stream);
+            return p_tile->overlay_stream_perf_config;
         case NOC_OVERLAY_STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE: return p_tile->overlay_stream_remote_dest_buf_space_available[stream];
         default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
     }
@@ -1788,6 +1789,11 @@ static void noc_overlay_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) {
             TTSIM_VERIFY(!(data & 0x3F), UnsupportedFunctionality, "stream_remote_dest_buf_space_available_update: data=0x%x", data);
             data = (p_tile->overlay_stream_remote_dest_buf_space_available[stream] + (data >> 6)) & 0x1FFFF;
             p_tile->overlay_stream_remote_dest_buf_space_available[stream] = data;
+            break;
+        case NOC_OVERLAY_STREAM_PERF_CONFIG:
+            TTSIM_VERIFY(!stream, UnsupportedFunctionality, "perf_config: stream=%d", stream);
+            TTSIM_VERIFY(!(data & 0xFFFFFFFE), UnsupportedFunctionality, "perf_config: data=0x%x", data);
+            p_tile->overlay_stream_perf_config = data;
             break;
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);

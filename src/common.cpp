@@ -12,7 +12,6 @@ const char *ttsim_error_category_name(TTSimErrorCategory category) {
         case TTSimErrorCategory::UnpredictableValueUsed: return "UnpredictableValueUsed";
         case TTSimErrorCategory::NonContractualBehavior: return "NonContractualBehavior";
         case TTSimErrorCategory::AssertionFailure: return "AssertionFailure";
-        case TTSimErrorCategory::MissingSpecification: return "MissingSpecification";
         case TTSimErrorCategory::UntestedFunctionality: return "UntestedFunctionality";
         case TTSimErrorCategory::UnimplementedFunctionality: return "UnimplementedFunctionality";
         case TTSimErrorCategory::UnsupportedFunctionality: return "UnsupportedFunctionality";

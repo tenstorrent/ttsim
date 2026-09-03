@@ -45,6 +45,7 @@ struct Rv64HartState {
 #define TENSIX_INST_FIFO_SIZE 512
 #define REPLAY_BUF_SIZE 32
 #define SRC_ROWS 64
+#define SRC_RWC_ROWS SRC_ROWS
 #define DST_ROWS 1024
 #define ROW_SIZE 16
 #define CC_STACK_SIZE 8
@@ -338,6 +339,7 @@ struct TensixTile {
     uint32_t overlay_stream_remote_dest_buf_start[TENSIX_NUM_NOC_OVERLAY_STREAMS];
     uint32_t overlay_stream_remote_dest_buf_size[TENSIX_NUM_NOC_OVERLAY_STREAMS];
     uint32_t overlay_stream_remote_dest_buf_space_available[TENSIX_NUM_NOC_OVERLAY_STREAMS];
+    uint32_t overlay_stream_perf_config;
     uint32_t dbg_array_rd_en;
     uint32_t dbg_array_rd_cmd;
     uint32_t dbg_bus_ctrl;
@@ -389,6 +391,7 @@ struct EthTile {
     uint32_t overlay_stream_remote_dest_buf_start[ETH_NUM_NOC_OVERLAY_STREAMS];
     uint32_t overlay_stream_remote_dest_buf_size[ETH_NUM_NOC_OVERLAY_STREAMS];
     uint32_t overlay_stream_remote_dest_buf_space_available[ETH_NUM_NOC_OVERLAY_STREAMS];
+    uint32_t overlay_stream_perf_config;
     uint32_t soft_reset_0;
     uint32_t eth_txq_control[ETH_NUM_TX_RX_QUEUES];
     uint32_t eth_txq_cmd[ETH_NUM_TX_RX_QUEUES];
@@ -581,6 +584,7 @@ bool tensix_can_push_inst(TensixState *p_tensix, uint32_t pipe);
 void tensix_push_inst(TensixState *p_tensix, uint32_t pipe, uint32_t inst, bool bypass_mop_expander);
 uint32_t tensix_cfg_rd32(TensixState *p_tensix, uint32_t bank, uint32_t offset);
 void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint32_t data);
+uint32_t tensix_debug_array_rd32(const TensixState *p_tensix, uint32_t cmd);
 uint32_t tensix_dst_rd32(TensixState *p_tensix, uint32_t pipe, uint32_t offset);
 bool tensix_decode_and_execute(TensixState *p_tensix, uint32_t pipe, uint32_t inst);
 

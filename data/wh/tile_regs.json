@@ -426,17 +426,15 @@
         },
         {
           "offset": "0x70",
-          "rw": null,
+          "rw": "wo",
           "reset_value": null,
-          "name": "cg_ctrl_hyst0",
-          "unsupported": true
+          "name": "cg_ctrl_hyst0"
         },
         {
           "offset": "0x74",
-          "rw": null,
+          "rw": "wo",
           "reset_value": null,
-          "name": "cg_ctrl_hyst1",
-          "unsupported": true
+          "name": "cg_ctrl_hyst1"
         },
         {
           "offset": "0x78",
@@ -446,10 +444,9 @@
         },
         {
           "offset": "0x7C",
-          "rw": null,
+          "rw": "wo",
           "reset_value": null,
-          "name": "cg_ctrl_hyst2",
-          "unsupported": true
+          "name": "cg_ctrl_hyst2"
         },
         {
           "offset": "0x80",
@@ -1014,6 +1011,12 @@
           "rw": "wo",
           "reset_value": null,
           "name": "remote_dest_buf_space_available_update"
+        },
+        {
+          "offset": "0x94",
+          "rw": "rw",
+          "reset_value": "0x00000000",
+          "name": "perf_config"
         },
         {
           "offset": "0x100",

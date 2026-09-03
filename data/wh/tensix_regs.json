@@ -804,6 +804,75 @@
     "name": "UNPACK_MISC_CFG_CfgContextCntInc_1"
    }
   ],
+  "42": [
+   {
+    "shift": 0,
+    "size": 1,
+    "name": "CG_CTRL_EN_Regblocks"
+   },
+   {
+    "shift": 1,
+    "size": 1,
+    "name": "CG_CTRL_EN_Fpu"
+   },
+   {
+    "shift": 2,
+    "size": 1,
+    "name": "CG_CTRL_EN_Fpu_mtile"
+   },
+   {
+    "shift": 3,
+    "size": 1,
+    "name": "CG_CTRL_EN_Fpu_sfpu"
+   },
+   {
+    "shift": 4,
+    "size": 1,
+    "name": "CG_CTRL_EN_Move"
+   },
+   {
+    "shift": 5,
+    "size": 4,
+    "name": "CG_CTRL_EN_Packer"
+   },
+   {
+    "shift": 9,
+    "size": 2,
+    "name": "CG_CTRL_EN_Unpacker"
+   },
+   {
+    "shift": 11,
+    "size": 1,
+    "name": "CG_CTRL_EN_Xsearch"
+   },
+   {
+    "shift": 12,
+    "size": 1,
+    "name": "CG_CTRL_EN_Thcon"
+   },
+   {
+    "shift": 13,
+    "size": 1,
+    "name": "CG_CTRL_EN_Trisc"
+   },
+   {
+    "shift": 14,
+    "size": 1,
+    "name": "CG_CTRL_EN_Retmux"
+   },
+   {
+    "shift": 15,
+    "size": 1,
+    "name": "CG_CTRL_EN_Ithread"
+   }
+  ],
+  "43": [
+   {
+    "shift": 2,
+    "size": 7,
+    "name": "CG_CTRL_EN_Hyst"
+   }
+  ],
   "48": [
    {
     "shift": 0,
@@ -921,7 +990,6 @@
    {
     "shift": 9,
     "size": 1,
-    "unsupported": true,
     "name": "ALU_FORMAT_SPEC_REG_SrcB_override"
    },
    {

@@ -938,7 +938,6 @@
    {
     "shift": 9,
     "size": 1,
-    "unsupported": true,
     "name": "ALU_FORMAT_SPEC_REG_SrcB_override"
    },
    {

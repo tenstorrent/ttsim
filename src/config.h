@@ -32,7 +32,7 @@
 #define TRISC_LOCAL_MEM_SIZE (2 * 1024)
 #define ERISC_LOCAL_MEM_SIZE (4 * 1024)
 #define ETH_SRAM_SIZE (256 * 1024)
-#define DRAM_CHANNEL_SIZE 0x80000000ull // 2GB for each of the 6 DRAM tiles (12GB total)
+#define DRAM_CHANNEL_SIZE 0x80000000ull // 2GiB for each of the 6 DRAM tiles (12GB total)
 
 #define RV32_IRAM_BASE 0xFFC00000 // for both NCRISC and ERISC
 #define RV32_IRAM_SIZE (16 * 1024)
@@ -69,7 +69,7 @@
 #define TRISC_LOCAL_MEM_SIZE (4 * 1024)
 #define ERISC_LOCAL_MEM_SIZE (8 * 1024)
 #define ETH_SRAM_SIZE (512 * 1024)
-#define DRAM_CHANNEL_SIZE 0x100000000ull // 4GB for each of the 8 DRAM tiles (32GB total)
+#define DRAM_CHANNEL_SIZE 0xFF000000ull // 4080MiB for each of the 8 DRAM tiles (~32GB total)
 
 #define NUM_NOCS 2
 #define NUM_NOC_CMD_BUFS 4

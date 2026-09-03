@@ -17,7 +17,6 @@ enum class TTSimErrorCategory {
     UnpredictableValueUsed, // as defined in tt-isa-documentation
     NonContractualBehavior, // as defined in tt-isa-documentation
     AssertionFailure, // internal bug in simulator
-    MissingSpecification, // tt-isa-documentation missing or inadequate to implement feature
     UntestedFunctionality, // implemented, but inadequate test coverage to enable yet
     UnimplementedFunctionality, // not implemented yet
     UnsupportedFunctionality, // planned to never be implemented
