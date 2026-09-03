@@ -227,7 +227,6 @@ to indicate whether the simulator or the software being simulated is at fault (s
 - **UntestedFunctionality**: Feature is implemented but lacks sufficient test coverage to be enabled
 - **UnimplementedFunctionality**: Feature not yet implemented but planned for future support
 - **UnsupportedFunctionality**: Feature unlikely to be implemented without strong justification
-- **MissingSpecification**: Feature requires additional internal specification work before implementation can proceed
 - **SystemError/ConfigurationError**: OS errors or issues with command line options, environment variables,
   or configuration files
 - **AssertionFailure**: Internal simulator bug

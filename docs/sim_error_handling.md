@@ -30,8 +30,6 @@ owners can route fixes to the right place.
   validation is added.
 - `AssertionFailure`: an internal invariant of the simulator has been violated. This indicates a
   simulator bug.
-- `MissingSpecification`: the simulator has reached a code path where the architectural
-  specification is incomplete; behavior cannot be determined without spec work.
 
 A surface complaint of the form *"the simulator exited and I don't know why"* applies regardless of
 which category fired. The reasoning below applies uniformly to all of them.
