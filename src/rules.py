@@ -88,7 +88,7 @@ def rules(ctx):
             if num_chips >= 16 and ctx.host.arch == 'x86_64':
                 gcc_opts += ['-mcmodel=medium'] # required for >2GB BSS in very large (Galaxy) sims
 
-            c_files = ['libttsim.cpp', 'common.cpp', 'rv32.cpp', 'sim.cpp', 'tensix.cpp', 'tile.cpp', 'fma.cpp']
+            c_files = ['libttsim.cpp', 'common.cpp', 'rv32.cpp', 'sim.cpp', 'tensix.cpp', 'tile.cpp']
 
             o_files = []
             for file in c_files:

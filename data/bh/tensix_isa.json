@@ -336,7 +336,7 @@
   "opcode": 68,
   "unsupported": true
  },
- "SETDMAREG": {
+ "SETGPR": {
   "opcode": 69,
   "args": {
    "reg_index_16b": "6:0",
@@ -451,7 +451,7 @@
    "setvalid": "1:0"
   }
  },
- "ADDDMAREG": {
+ "ADDGPR": {
   "opcode": 88,
   "args": {
    "op_a_reg_index": "5:0",
@@ -460,11 +460,11 @@
    "op_b_is_const": "23:23"
   }
  },
- "SUBDMAREG": {
+ "SUBGPR": {
   "opcode": 89,
   "unsupported": true
  },
- "MULDMAREG": {
+ "MULGPR": {
   "opcode": 90,
   "args": {
    "op_a_reg_index": "5:0",
@@ -473,15 +473,15 @@
    "op_b_is_const": "23:23"
   }
  },
- "BITWOPDMAREG": {
+ "BITWOPGPR": {
   "opcode": 91,
   "unsupported": true
  },
- "SHIFTDMAREG": {
+ "SHIFTGPR": {
   "opcode": 92,
   "unsupported": true
  },
- "CMPDMAREG": {
+ "CMPGPR": {
   "opcode": 93,
   "unsupported": true
  },

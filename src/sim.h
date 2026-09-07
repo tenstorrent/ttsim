@@ -588,6 +588,8 @@ uint32_t tensix_debug_array_rd32(const TensixState *p_tensix, uint32_t cmd);
 uint32_t tensix_dst_rd32(TensixState *p_tensix, uint32_t pipe, uint32_t offset);
 bool tensix_decode_and_execute(TensixState *p_tensix, uint32_t pipe, uint32_t inst);
 
+uint32_t sfpu_mad(uint32_t a, uint32_t b, uint32_t c);
+
 void t_tile_init(uint32_t tile_id);
 void e_tile_init(uint32_t tile_id);
 void p_tile_init();
@@ -610,12 +612,3 @@ template<class T> inline T tile_rd(uint32_t coord, uint64_t addr) {
 template<class T> inline void tile_wr(uint32_t coord, uint64_t addr, T data) {
     tile_wr_bytes(coord, addr, &data, sizeof(data));
 }
-
-uint32_t fma_model_wh(uint32_t x, uint32_t y, uint32_t z);
-uint32_t fma_model_bh(uint32_t x, uint32_t y, uint32_t z);
-
-#if TT_ARCH_VERSION == 0
-#define fma_model fma_model_wh
-#else
-#define fma_model fma_model_bh
-#endif

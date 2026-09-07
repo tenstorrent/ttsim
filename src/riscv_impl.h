@@ -326,20 +326,8 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu_imm)(RiscvHartState *p_
             switch (imm) {
                 case 0 ... XLEN - 1: value = src << imm; break; // SLLI
 #if HAS_ZBA_ZBB
-                case 0x600: // CLZ
-#if XLEN == 32
-                    value = src ? __builtin_clz(src) : 32;
-#else
-                    value = src ? __builtin_clzll(src) : 64;
-#endif
-                    break;
-                case 0x601: // CTZ
-#if XLEN == 32
-                    value = src ? __builtin_ctz(src) : 32;
-#else
-                    value = src ? __builtin_ctzll(src) : 64;
-#endif
-                    break;
+                case 0x600: value = std::countl_zero(src); break; // CLZ
+                case 0x601: value = std::countr_zero(src); break; // CTZ
                 case 0x602: // CPOP
 #if XLEN == 32
                     value = __builtin_popcount(src);
@@ -422,8 +410,8 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu_imm_32)(RiscvHartState 
                 case 0 ... 0x1F: value = sext32_to_64(src << imm); break; // SLLIW
 #if HAS_ZBA_ZBB
                 case 0x80 ... 0xBF: value = uint64_t(src) << (imm & 63); break; // SLLI.UW
-                case 0x600: value = src ? __builtin_clz(src) : 32; break; // CLZW
-                case 0x601: value = src ? __builtin_ctz(src) : 32; break; // CTZW
+                case 0x600: value = std::countl_zero(src); break; // CLZW
+                case 0x601: value = std::countr_zero(src); break; // CTZW
                 case 0x602: value = __builtin_popcount(src); break; // CPOPW
 #endif
                 default: TTSIM_ERROR(UnimplementedFunctionality, "funct3=%d imm=0x%x", funct3, imm);
@@ -474,7 +462,7 @@ template<bool neg_product, bool neg_addend> static void RV_XLEN_PREFIX(f_fma)(Ri
     if (neg_addend) {
         c ^= 0x80000000;
     }
-    p_hart->f_regs[r_dst] = fma_model(a, b, c); // note: uses same non-IEEE FMA as SFPU
+    p_hart->f_regs[r_dst] = sfpu_mad(a, b, c); // note: uses same non-IEEE FMA as SFPU
 #endif
 }
 
@@ -500,17 +488,17 @@ static void RV_XLEN_PREFIX(f_alu)(RiscvHartState *p_hart, uint32_t inst) {
         case 0x00: // FADD.S
             TTSIM_VERIFY((funct3 <= 4) || (funct3 == 7), UndefinedBehavior, "FADD.S rm=%d", funct3);
             TTSIM_VERIFY(funct3 == 7, UnsupportedFunctionality, "FADD.S rm=%d", funct3);
-            p_hart->f_regs[r_dst] = fma_model(a, 0x3F800000, b);
+            p_hart->f_regs[r_dst] = sfpu_mad(a, 0x3F800000, b);
             break;
         case 0x04: // FSUB.S
             TTSIM_VERIFY((funct3 <= 4) || (funct3 == 7), UndefinedBehavior, "FSUB.S rm=%d", funct3);
             TTSIM_VERIFY(funct3 == 7, UnsupportedFunctionality, "FSUB.S rm=%d", funct3);
-            p_hart->f_regs[r_dst] = fma_model(a, 0x3F800000, b ^ 0x80000000);
+            p_hart->f_regs[r_dst] = sfpu_mad(a, 0x3F800000, b ^ 0x80000000);
             break;
         case 0x08: // FMUL.S
             TTSIM_VERIFY((funct3 <= 4) || (funct3 == 7), UndefinedBehavior, "FMUL.S rm=%d", funct3);
             TTSIM_VERIFY(funct3 == 7, UnsupportedFunctionality, "FMUL.S rm=%d", funct3);
-            p_hart->f_regs[r_dst] = fma_model(a, b, (a ^ b) & 0x80000000);
+            p_hart->f_regs[r_dst] = sfpu_mad(a, b, (a ^ b) & 0x80000000);
             break;
         case 0x0C: TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support FDIV");
         case 0x10:
