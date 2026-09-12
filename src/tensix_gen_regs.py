@@ -19,6 +19,7 @@ def main():
 
     with open(args.out, 'w') as f:
         unsupported_fields: list[tuple] = []
+        unimplemented_fields: list[tuple] = []
         for (group, regs) in all_regs.items():
             reg_size = group_sizes[group]
             f.write(f'#define FOR_EACH_{group.upper()}_REG(_) \\\n')
@@ -39,6 +40,9 @@ def main():
                     if field.get('unsupported', False):
                         unsupported_fields.append((group, addr, name, mask))
                         f.write(f'            uint32_t : {size}; \\\n')
+                    elif field.get('unimplemented', False):
+                        unimplemented_fields.append((group, addr, name, mask))
+                        f.write(f'            uint32_t : {size}; \\\n')
                     elif size == 32:
                         f.write(f'            uint32_t {name}; \\\n')
                     else:
@@ -58,6 +62,13 @@ def main():
         f.write(' \\\n'.join(
             f'        TTSIM_VERIFY(!((p_config)->{group}{addr} & 0x{mask:X}), UnsupportedFunctionality, "{name}");'
             for (group, addr, name, mask) in unsupported_fields
+        ))
+        f.write(' \\\n    } while (0)\n')
+        f.write('#define CHECK_UNIMPLEMENTED_CFG_FIELDS(p_config) \\\n')
+        f.write('    do { \\\n')
+        f.write(' \\\n'.join(
+            f'        TTSIM_VERIFY(!((p_config)->{group}{addr} & 0x{mask:X}), UnimplementedFunctionality, "{name}");'
+            for (group, addr, name, mask) in unimplemented_fields
         ))
         f.write(' \\\n    } while (0)\n')
 
