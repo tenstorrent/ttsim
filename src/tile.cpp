@@ -937,10 +937,11 @@ static uint32_t debug_bus_rd_data(const TensixState *p_tensix, uint32_t ctrl) {
             set_bits(data, 4, 18,  channel ? p->ch1_x_cr : p->ch0_x_cr);
             set_bits(data, 4, 64,  channel ? p->ch1_y    : p->ch0_y);
             set_bits(data, 4, 80,  channel ? p->ch1_y_cr : p->ch0_y_cr);
-            set_bits(data, 4, 96,  channel ? p->ch1_z    : p->ch0_z);
-            set_bits(data, 4, 104, channel ? p->ch1_z_cr : p->ch0_z_cr);
-            set_bits(data, 4, 112, channel ? p->ch1_w    : p->ch0_w);
-            set_bits(data, 4, 120, channel ? p->ch1_w_cr : p->ch0_w_cr);
+            // Z and W only get 8 bits each of readback, even where the counters are wider
+            set_bits(data, 4, 96,  (channel ? p->ch1_z    : p->ch0_z)    & 0xFF);
+            set_bits(data, 4, 104, (channel ? p->ch1_z_cr : p->ch0_z_cr) & 0xFF);
+            set_bits(data, 4, 112, (channel ? p->ch1_w    : p->ch0_w)    & 0xFF);
+            set_bits(data, 4, 120, (channel ? p->ch1_w_cr : p->ch0_w_cr) & 0xFF);
             return data[read32_sel];
         }
         if (signal_sel == 9) { // SrcA/SrcB control

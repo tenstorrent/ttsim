@@ -2821,16 +2821,17 @@ TENSIX_EXECUTE_UNPACR() {
     bool force_shared_exp = unpack_block_selection ? p_config->THCON_SEC1_REG2_Force_shared_exp
                                                    : p_config->THCON_SEC0_REG2_Force_shared_exp;
     uint32_t in_addr_exponents = base_addr << 4; // slightly odd: byte address in .4 fixed point
-    if (is_bfp_format(in_data_format) && !force_shared_exp) { // requires much more complex address computations and loading separate exponent stream
+    bool bfp_exp_stream = is_bfp_format(in_data_format) && !force_shared_exp;
+    if (bfp_exp_stream) { // requires much more complex address computations and loading separate exponent stream
         TTSIM_VERIFY((!bits<5,5>(tile_desc0)), UnsupportedFunctionality, "no_bfp_exp_section");
         uint32_t num_elements = tile_x_dim * tile_y_dim * tile_z_dim * tile_w_dim; // XXX hopefully this cannot be uint64_t
         uint32_t num_exponents = (num_elements + 15) / 16; // 1 exponent per 16 sign/magnitudes
         base_addr += (num_exponents + 15) & ~15; // always make exponents a multiple of 16B
     }
     uint32_t first_datum = p_addr_ctrl->ch0_x +
-                           p_addr_ctrl->ch0_y * ch0_y_stride +
-                           p_addr_ctrl->ch0_z * ch0_z_stride +
-                           p_addr_ctrl->ch0_w * ch0_w_stride;
+                           (p_addr_ctrl->ch0_y & 0xFF) * ch0_y_stride +
+                           (p_addr_ctrl->ch0_z & 0xFF) * ch0_z_stride +
+                           (p_addr_ctrl->ch0_w & 0xFF) * ch0_w_stride;
     in_addr_exponents += first_datum; // 1/16 of a byte per datum
     uint32_t src_addr_bits = (base_addr << 3) + first_datum * in_element_size_bits;
     if (haloize || tileize) {
@@ -2849,7 +2850,6 @@ TENSIX_EXECUTE_UNPACR() {
         TTSIM_VERIFY(!haloize, UndefinedBehavior, "unpack_to_dst cannot be used with haloize");
     }
 
-    TTSIM_VERIFY(!p_addr_ctrl->ch1_w, UntestedFunctionality, "ch1_w=%d", p_addr_ctrl->ch1_w);
     // Note: UNP0/1_ADDR_BASE_REG_1_Base (cfg40/48, cfg49/61) is not instantiated and errors on write; always 0
     uint32_t dst_addr = (p_addr_ctrl->ch1_y * ch1_y_stride +
                          p_addr_ctrl->ch1_z * ch1_z_stride +
@@ -2876,8 +2876,14 @@ TENSIX_EXECUTE_UNPACR() {
     }
     TTSIM_VERIFY(!col_shift, UnsupportedFunctionality, "col_shift=%d", col_shift);
 
-    TTSIM_VERIFY(p_addr_ctrl->ch0_x <= p_addr_ctrl->ch1_x, UnsupportedFunctionality, "invalid ch0_x=%d ch1_x=%d", p_addr_ctrl->ch0_x, p_addr_ctrl->ch1_x);
+    uint32_t x_limit = 65536 / std::max(8u, in_element_size_bits);
+    TTSIM_VERIFY(p_addr_ctrl->ch1_x < x_limit, UndefinedBehavior, "ch1_x=%d exceeds x_limit=%d", p_addr_ctrl->ch1_x, x_limit);
+    TTSIM_VERIFY(p_addr_ctrl->ch0_x <= p_addr_ctrl->ch1_x, UndefinedBehavior, "invalid ch0_x=%d ch1_x=%d", p_addr_ctrl->ch0_x, p_addr_ctrl->ch1_x);
     uint32_t count = p_addr_ctrl->ch1_x - p_addr_ctrl->ch0_x + 1;
+    if (bfp_exp_stream) {
+        TTSIM_VERIFY(first_datum + count <= 65536, UndefinedBehavior,
+            "bfp exponent index out of range: first_datum=%d count=%d", first_datum, count);
+    }
     if (unpack_to_dst) {
         TTSIM_VERIFY(!p_tensix->thread[pipe].SRCA_SET_SetOvrdWithAddr, UndefinedBehavior, "unpack_to_dst: SRCA_SET_SetOvrdWithAddr=1");
     } else {
@@ -3480,11 +3486,11 @@ TENSIX_EXECUTE_SFPLOAD() {
                 e += 112;
             }
             value = (s << 31) | (e << 23) | (m << 13);
-        } else if (instr_mod0 == 2) {
+        } else
+        if (instr_mod0 == 2) {
             value = dst_decode_bf16(read_dst16b(p_tensix, row, col));
             value <<= 16;
-        } else
-        if ((instr_mod0 == 3) || (instr_mod0 == 4)) {
+        } else if ((instr_mod0 == 3) || (instr_mod0 == 4)) {
             value = dst_decode_fp32(read_dst32b(p_tensix, row, col));
         } else if (instr_mod0 == 6) {
             value = read_dst16b(p_tensix, row, col);
@@ -4507,7 +4513,7 @@ TENSIX_EXECUTE_SFPCAST() {
 TENSIX_EXECUTE_SFPCONFIG() {
     TTSIM_VERIFY(instr_mod1 <= 1, UnsupportedFunctionality, "instr_mod1=%d", instr_mod1);
     if (!instr_mod1) { // require all lanes of LReg[0] to be identical to one another
-        if (config_dest != 14) { // ...with exception of cases where this is supported below
+        if ((config_dest < 11) || (config_dest > 14)) { // ...with exception of cases where this is supported below
             for (uint32_t lane = 1; lane < 32; lane++) {
                 TTSIM_VERIFY(p_tensix->l_regs[0][0] == p_tensix->l_regs[0][lane],
                     UnsupportedFunctionality, "config_dest=%d: l_regs[0]: lane[%d] mismatch with lane[0]", config_dest, lane);

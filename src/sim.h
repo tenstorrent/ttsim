@@ -51,8 +51,13 @@ struct Rv64HartState {
 #define CC_STACK_SIZE 8
 #define ADC_X_MASK 0x3FFFF // 18 bits
 #define ADC_Y_MASK 0x1FFF // 13 bits
+#if TT_ARCH_VERSION == 1
+#define ADC_Z_MASK 0x1FFF // 13 bits, widened on BH
+#define ADC_W_MASK 0x1FFF // 13 bits, widened on BH
+#else
 #define ADC_Z_MASK 0xFF // 8 bits
 #define ADC_W_MASK 0xFF // 8 bits
+#endif
 #if TT_ARCH_VERSION == 1
 #define TENSIX_CFG_STATE_SIZE 56
 #define TENSIX_THD_STATE_SIZE 68
