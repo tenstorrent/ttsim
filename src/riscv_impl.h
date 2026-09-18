@@ -1260,7 +1260,6 @@ static void RV_XLEN_PREFIX(csrrw)(RiscvHartState *p_hart, uint32_t inst) {
     rv64_csr_op(p_hart, inst, p_hart->x_regs[bits<19,15>(inst)], true, 0);
 #else
     uint32_t r_dst = bits<11,7>(inst);
-    TTSIM_VERIFY(!r_dst, UntestedFunctionality, "r_dst=%d", r_dst);
     uint32_t r_src = bits<19,15>(inst);
     uint32_t csr = bits<31,20>(inst);
 
@@ -1303,9 +1302,7 @@ static void RV_XLEN_PREFIX(csrrc)(RiscvHartState *p_hart, uint32_t inst) {
     rv64_csr_op(p_hart, inst, r_src ? p_hart->x_regs[r_src] : 0, r_src != 0, 2);
 #else
     uint32_t r_dst = bits<11,7>(inst);
-    TTSIM_VERIFY(!r_dst, UntestedFunctionality, "r_dst=%d", r_dst);
     uint32_t r_src = bits<19,15>(inst);
-    TTSIM_VERIFY(r_src, UntestedFunctionality, "r_src=%d", r_src);
     uint32_t csr = bits<31,20>(inst);
 
     uint_xlen_t src = p_hart->x_regs[r_src];
@@ -1326,7 +1323,6 @@ static void RV_XLEN_PREFIX(csrrwi)(RiscvHartState *p_hart, uint32_t inst) {
     rv64_csr_op(p_hart, inst, bits<19,15>(inst), true, 0);
 #else
     uint32_t r_dst = bits<11,7>(inst);
-    TTSIM_VERIFY(!r_dst, UntestedFunctionality, "r_dst=%d", r_dst);
     uint32_t imm = bits<19,15>(inst);
     uint32_t csr = bits<31,20>(inst);
 
@@ -1368,7 +1364,6 @@ static void RV_XLEN_PREFIX(csrrci)(RiscvHartState *p_hart, uint32_t inst) {
     uint32_t imm = bits<19,15>(inst);
     rv64_csr_op(p_hart, inst, imm, imm != 0, 2);
 #else
-    TTSIM_ERROR_NOFMT(UntestedFunctionality);
     uint32_t r_dst = bits<11,7>(inst);
     uint32_t imm = bits<19,15>(inst);
     uint32_t csr = bits<31,20>(inst);

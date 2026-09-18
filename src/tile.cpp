@@ -1823,6 +1823,7 @@ static void tensix_mop_cfg_wr32(uint32_t tile_id, uint32_t riscv_id, uint32_t of
 
 static uint32_t tensix_regfile_rd32(uint32_t tile_id, uint32_t riscv_id, uint32_t offset) {
     TensixTile *p_tile = &g_t_tiles[tile_id];
+    riscv_id = (riscv_id == RV32_ID_BRISC) ? RV32_ID_TRISC0 : riscv_id;
     auto [tensix_id, pipe] = trisc_pipe(riscv_id);
     TTSIM_VERIFY(!(offset & 3), AssertionFailure, "misaligned offset=0x%x", offset);
     switch (offset / 4) {
@@ -1835,6 +1836,7 @@ static uint32_t tensix_regfile_rd32(uint32_t tile_id, uint32_t riscv_id, uint32_
 
 static void tensix_regfile_wr32(uint32_t tile_id, uint32_t riscv_id, uint32_t offset, uint32_t data) {
     TensixTile *p_tile = &g_t_tiles[tile_id];
+    riscv_id = (riscv_id == RV32_ID_BRISC) ? RV32_ID_TRISC0 : riscv_id;
     auto [tensix_id, pipe] = trisc_pipe(riscv_id);
     TTSIM_VERIFY(!(offset & 3), AssertionFailure, "misaligned offset=0x%x", offset);
     switch (offset / 4) {
