@@ -4,9 +4,7 @@
 // Per-tile infrastructure: tile init, NOC routing, TDMA, Ethernet, DRAM, debug/config registers.
 #include "sim.h"
 #include "topology.h"
-#if TT_ARCH_VERSION == 0
 #include "eth_fw_blob.h" // generated
-#endif
 
 #if TT_ARCH_VERSION == 0
 static constexpr uint64_t PCIE_HOST_WINDOW_BASE = 0x800000000ull;
@@ -272,7 +270,7 @@ void t_tile_init(uint32_t tile_id) {
     }
 #endif
     for (uint32_t tensix_id = 0; tensix_id < std::size(p_tile->tensix); tensix_id++) {
-        tensix_init(&p_tile->tensix[tensix_id], tile_id);
+        tensix_init(&p_tile->tensix[tensix_id], tile_id, tensix_id);
     }
     p_tile->soft_reset_0 = RISCV_DEBUG_REGS_SOFT_RESET_0_RESET_VALUE;
 }
@@ -349,6 +347,9 @@ void e_tile_init(uint32_t tile_id) {
     p_tile->eth_txq_txpkt_cfg_sel_sw[1] = 0x111;
     p_tile->eth_txq_txpkt_cfg_sel_hw[0] = 0;
     p_tile->eth_txq_txpkt_cfg_sel_hw[1] = 1;
+    mem_wr<uint32_t>(&p_tile->sram[0x7CC04], 2); // eth_status.port_status = PORT_DOWN (no link)
+    mem_wr<uint32_t>(&p_tile->sram[0x7CC00], 0xC0DEA000); // eth_status.postcode = POSTCODE_ETH_INIT_PASS
+    mem_wr<uint32_t>(&p_tile->sram[0x7CFBC], 0x010700); // eth_fw_ver = 1.7.0 {patch, minor, major}
     bh_eth_link_init(tile_id);
 #endif
 }
@@ -360,8 +361,9 @@ void p_tile_init() {
 #define ARC_TELEMETRY_TABLE_CSM_OFFSET 0x100
 #define ARC_TELEMETRY_VALUES_CSM_OFFSET 0x200
 #define GDDR_STATUS_TRAINED (0x55555555u >> (32 - 2 * NUM_DRAM_CHANNELS)) // Mark every channel trained.
+#define AICLK_MHZ 1000
 #if TT_ARCH_VERSION == 0
-#define ARC_SMBUS_TELEMETRY_CSM_OFFSET 0x000
+#define ARC_SMBUS_TELEMETRY_CSM_OFFSET 0x78d60 // matches management firmware placement
 #define LEGACY_TELEM_FW_BUNDLE_VERSION 49
 #define FLASH_BUNDLE_VERSION 0x12040000 // v18.4
 #define ETH_LIVE_STATUS_MASK 0xFFFF     // all 16 eth tiles live
@@ -373,6 +375,9 @@ void p_tile_init() {
 #define ARC_MSG_QUEUE_NUM_ENTRIES 8
 #define ARC_MSG_QUEUE_HEADER_SIZE 32
 #define ARC_MSG_ENTRY_SIZE 32
+#define ENABLED_GDDR_MASK ((1u << NUM_DRAM_CHANNELS) - 1)
+#define ENABLED_L2CPU_MASK 0 // no L2 cpus modeled
+#define TELEM_UPDATE_SPEED_MS 100
 #endif
 
 static uint64_t board_id(uint32_t chip_id) {
@@ -545,52 +550,48 @@ static void wh_x2_eth_link_init(uint32_t tile_id) {
 #endif
 
 #if TT_ARCH_VERSION == 1
-// Fake the eth base-FW boot_results that the active-erisc app (and UMD) read to confirm a
-// link state -- the base FW that writes these after link training is faked out. A tile with
-// an inter-chip peer advertises a trained, connected link; every other tile reports the link
-// down. UMD polls port_status until it leaves PORT_UNKNOWN, so an unpeered tile must still
-// report a terminal PORT_DOWN. Offsets per tt-metal blackhole eth_fw_api.h boot_results_t at
-// MEM_SYSENG_BOOT_RESULTS_BASE 0x7CC00 (eth_status @ 0, eth_live_status @ 512, eth_fw_ver @ 0x3BC,
-// local_info @ 0x3C0, remote_info @ 0x3E0; chip_info fields: asic_location +1, eth_id +2,
-// logical_eth_id +3, board_id_hi +4, board_id_lo +8).
+// Boot the mock eth base FW
 static void bh_eth_link_init(uint32_t tile_id) {
+#if NUM_CHIPS > 1
     EthTile *p_tile = &g_e_tiles[tile_id];
     uint32_t remote_chip = 0, remote_eth = 0;
-    if (eth_peer(tile_id, &remote_chip, &remote_eth)) {
+    bool peered = eth_peer(tile_id, &remote_chip, &remote_eth);
+    constexpr uint32_t eth_fw_base = 0x76000; // must match fw/eth/rules.py
+    constexpr uint32_t eth_fw_peer_flag = 0x75FFC; // must match fw/eth/bh_eth_fw.c
+    static_assert(eth_fw_base + sizeof(eth_fw_blob) <= 0x7CC00); // fw fits below boot_results
+    memcpy(&p_tile->sram[eth_fw_base], eth_fw_blob, sizeof(eth_fw_blob));
+    mem_wr<uint32_t>(&p_tile->sram[eth_fw_peer_flag], peered);
+    if (peered) {
         mem_wr<uint32_t>(&p_tile->sram[0x7CC04], 1); // eth_status.port_status = PORT_UP
-        mem_wr<uint32_t>(&p_tile->sram[0x7CC08], 2); // eth_status.train_status = LINK_TRAIN_PASS
-        mem_wr<uint32_t>(&p_tile->sram[0x7CE04], 1); // eth_live_status.rx_link_up = 1
-        constexpr uint32_t LOCAL = 0x7CFC0, REMOTE = 0x7CFE0;
+        // The fw's chip_info inputs (layout per fw/eth/bh_eth_fw.c). The one committed fw image
+        // serves every Blackhole config, so anything NUM_CHIPS-dependent is resolved here.
+        constexpr uint32_t LOCAL = 0x75FC8, REMOTE = LOCAL + 24; // must match fw/eth/bh_eth_fw.c
         uint64_t local_board_id = board_id(g_current_chip_id);
         uint64_t remote_board_id = board_id(remote_chip);
-        mem_wr<uint8_t>(&p_tile->sram[LOCAL + 1], uint8_t(asic_location(g_current_chip_id))); // asic_location
-        mem_wr<uint8_t>(&p_tile->sram[LOCAL + 2], uint8_t(tile_id)); // eth_id
-        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 4], uint32_t(local_board_id >> 32)); // board_id_hi
-        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 8], uint32_t(local_board_id)); // board_id_lo
-        mem_wr<uint8_t>(&p_tile->sram[REMOTE + 1], uint8_t(asic_location(remote_chip))); // asic_location
-        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 20], 0); // asic_id_hi
-        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 24], 1 + g_current_chip_id); // asic_id_lo
-        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 20], 0); // asic_id_hi
-        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 24], 1 + remote_chip); // asic_id_lo
-        mem_wr<uint8_t>(&p_tile->sram[REMOTE + 2], uint8_t(remote_eth)); // eth_id (remote channel)
+        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 0], asic_location(g_current_chip_id)); // asic_location
+        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 4], tile_id); // eth_id
+        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 8], uint32_t(local_board_id >> 32)); // board_id_hi
+        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 12], uint32_t(local_board_id)); // board_id_lo
+        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 16], 0); // asic_id_hi
+        mem_wr<uint32_t>(&p_tile->sram[LOCAL + 20], 1 + g_current_chip_id); // asic_id_lo
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 0], asic_location(remote_chip)); // asic_location
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 4], remote_eth); // eth_id
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 8], uint32_t(remote_board_id >> 32)); // board_id_hi
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 12], uint32_t(remote_board_id)); // board_id_lo
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 16], 0); // asic_id_hi
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 20], 1 + remote_chip); // asic_id_lo
 #if NUM_CHIPS == 8
         // P150 base FW before 18.12 numbers logical channels after the four PCIe SerDes channels.
-        mem_wr<uint8_t>(&p_tile->sram[REMOTE + 3], uint8_t(remote_eth - 4)); // logical_eth_id
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 24], remote_eth - 4); // logical_eth_id
 #else
-        mem_wr<uint8_t>(&p_tile->sram[REMOTE + 3], uint8_t(remote_eth)); // logical_eth_id
+        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 24], remote_eth); // logical_eth_id
 #endif
-        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 4], uint32_t(remote_board_id >> 32)); // board_id_hi
-        mem_wr<uint32_t>(&p_tile->sram[REMOTE + 8], uint32_t(remote_board_id)); // board_id_lo
-        p_tile->soft_reset_0 &= ~0x800u;
-    } else {
-        mem_wr<uint32_t>(&p_tile->sram[0x7CC04], 2); // eth_status.port_status = PORT_DOWN (no link)
     }
-    mem_wr<uint8_t>(&p_tile->sram[0x7CFBE], 1); // major
-    mem_wr<uint8_t>(&p_tile->sram[0x7CFBD], 6); // minor
-    mem_wr<uint8_t>(&p_tile->sram[0x7CFBC], 0); // patch
-    // eth_status.postcode reports how far the base FW's eth_init() got; tt-metal waits for a terminal
-    // value (PASS/FAIL/SKIP) on every idle eth core before resetting it. Init completes -> PASS.
-    mem_wr<uint32_t>(&p_tile->sram[0x7CC00], 0xC0DEA000); // eth_status.postcode = POSTCODE_ETH_INIT_PASS
+    ttsim_rv32_set_core_active('E', tile_id, 0, true);
+    p_tile->rv32[0].pc = eth_fw_base;
+    p_tile->ierisc_reset_pc = eth_fw_base; // also the restart PC; 0 stays the "no base fw" guard
+    p_tile->soft_reset_0 &= ~0x800u;
+#endif
 }
 
 static uint32_t tensix_enabled_column_telemetry() {
@@ -644,7 +645,7 @@ void a_tile_init() {
         {4, any_rows_harvested},        // HARVESTING_STATE
         {11, 40u << 16},                // ASIC_TEMPERATURE: 40 C
         {13, 35u << 16},                // BOARD_TEMPERATURE: 35 C
-        {14, 1000},                     // AICLK (MHz)
+        {14, AICLK_MHZ},                // AICLK (MHz)
         {15, 900},                      // AXICLK (MHz)
         {16, 540},                      // ARCCLK (MHz)
         {21, ETH_LIVE_STATUS_MASK},     // ETH_LIVE_STATUS: one bit per live eth tile
@@ -653,11 +654,15 @@ void a_tile_init() {
         {32, 1},                        // TIMER_HEARTBEAT
         {52, chip_asic_location},       // ASIC_LOCATION
 #if TT_ARCH_VERSION == 1
+        {5, TELEM_UPDATE_SPEED_MS},     // UPDATE_TELEM_SPEED
         {34, enabled_tensix_cols},      // ENABLED_TENSIX_COL
         {38, chip_pcie_usage},          // PCIE_USAGE
         {35, ETH_LIVE_STATUS_MASK},     // ENABLED_ETH
+        {36, ENABLED_GDDR_MASK},        // ENABLED_GDDR
+        {37, ENABLED_L2CPU_MASK},       // ENABLED_L2CPU
         {61, 0x0},                      // ASIC_ID_HIGH
         {62, 1 + g_current_chip_id},    // ASIC_ID_LOW
+        {66, AICLK_MHZ},                // AICLK_ARB_MAX: arbiter index 0, AICLK unclamped
 #endif
     };
     constexpr uint32_t n = std::size(telem);
@@ -2296,9 +2301,9 @@ static bool e_tile_mmio_wr32(uint32_t tile_id, uint64_t addr, uint32_t data) {
             if (data & 0x800) { // Put first erisc into reset
                 ttsim_rv32_set_core_active('E', tile_id, 0, false);
             } else if (!ttsim_rv32_get_core_active('E', tile_id, 0)) { // Take first erisc out of reset
-                // Take out of reset only if the reset PC has been programmed
-                // This is a workaround for not running base fw on erisc0
-                // This is the idle erisc case, or erisc1 enabling erisc0
+                // Take out of reset only if the reset PC has been programmed. bh_eth_link_init
+                // seeds it with the base fw entry on multi-chip builds, so 0 means "nothing to
+                // run": single-chip, or metal never set up the idle erisc.
                 if (p_tile->ierisc_reset_pc) {
                     p_tile->rv32[0].pc = p_tile->ierisc_reset_pc;
                     ttsim_rv32_set_core_active('E', tile_id, 0, true);
@@ -2313,14 +2318,6 @@ static bool e_tile_mmio_wr32(uint32_t tile_id, uint64_t addr, uint32_t data) {
                 // erisc1 runs from a garbage PC with an invalid stack pointer).
                 if (p_tile->subordinate_ierisc_reset_pc) {
                     p_tile->rv32[1].pc = p_tile->subordinate_ierisc_reset_pc;
-                    // Establish the stack and global pointers the faked base FW would have set
-                    // before jumping to the app entry (the app starts with a C prologue that
-                    // assumes a valid sp, and reaches its LDM globals via gp-relative loads).
-                    // gp is __global_pointer$ from the tt-metal subordinate-ierisc app link; it is
-                    // per-firmware, so it differs from the active-erisc app's gp on the RUN_MSG_GO
-                    // path below.
-                    p_tile->rv32[1].x_regs[2] = 0xFFB02000; // sp = top of eth LDM
-                    p_tile->rv32[1].x_regs[3] = 0xFFB007F0; // gp = __global_pointer$
                     ttsim_rv32_set_core_active('E', tile_id, 1, true);
                 }
             }
@@ -2519,7 +2516,7 @@ static void arc_service_message(uint8_t code, uint32_t *resp) {
             *resp = ARC_SMBUS_TELEMETRY_CSM_OFFSET;
             break;
         case 0x34: // GET_AICLK
-            *resp = 1000; // AI CLK = 1000MHz
+            *resp = AICLK_MHZ;
             break;
 #endif
         case 0x57: // ARC_GET_HARVESTING
@@ -2753,12 +2750,6 @@ void tile_rd_bytes(uint32_t coord, uint64_t addr, void *p, uint32_t size) {
         if (addr < ETH_SRAM_SIZE) {
             TTSIM_VERIFY(addr + size <= ETH_SRAM_SIZE, UndefinedBehavior, "ETH read overrun");
             memcpy(p, &g_e_tiles[tile_id].sram[addr], size);
-#if TT_ARCH_VERSION == 1
-            // TODO: This is a hack to simulate base fw heartbeat
-            if (addr == 0x7CC70 && !ttsim_rv32_get_core_active('E', tile_id, 0)) {
-                mem_wr<uint32_t>(&g_e_tiles[tile_id].sram[addr], mem_rd<uint32_t>(&g_e_tiles[tile_id].sram[addr]) + 1);
-            }
-#endif
             return;
         }
         TTSIM_VERIFY(size == 4, UnimplementedFunctionality, "tile=%c%d addr=0x%llx size=%d", tile_type, tile_id, addr, size);
@@ -2822,96 +2813,11 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
                 }
             }
 #elif TT_ARCH_VERSION == 1
-            // Fake the cooperative eth base-FW + active-erisc launch handshake. metal posts a go
-            // message (go_msg_t) with signal=RUN_MSG_INIT (0x40, the top byte) to the active-erisc
-            // mailbox go_messages[0] at L1 0x590, then polls for RUN_MSG_DONE. The real eth base FW
-            // and app (which ttsim fakes as no-ops) would process the launch and ack; emulate the
-            // ack by storing the message with the signal byte cleared to RUN_MSG_DONE (0) so device
-            // init proceeds. (RUN_MSG_* and go_msg_t.signal per tt-metal dev_msgs.h.)
-            if (addr == 0x590 && size == 4 && (mem_rd<uint32_t>(p) >> 24) == 0x40) {
-                mem_wr<uint32_t>(&g_e_tiles[tile_id].sram[addr], mem_rd<uint32_t>(p) & 0x00FFFFFF);
-                return;
-            }
-            // RUN_MSG_GO (signal 0x80) launches the active-erisc app kernel (e.g. the fabric erisc
-            // router / EDM). On silicon the active-erisc base FW, on GO, computes the kernel entry
-            // from the launch message, sets up gp/sp, runs setup_kernel_launch_args(), and jumps in;
-            // ttsim fakes the base FW, so emulate that launch here. The launch message lives in the
-            // active-erisc mailbox (base 0x100; mailboxes_t go_messages[0] offset 0x490,
-            // L1 address 0x590). Field offsets per tt-metal dev_msgs.h
-            // (BH ProgrammableCoreType::COUNT=4, MaxProcessorsPerCoreType=5):
-            // launch_msg_rd_ptr @ base+12; launch[] @ base+16 (stride sizeof(launch_msg_t)=144);
-            // kernel_config_base[ACTIVE_ETH=1] @ launch+4; rta_offset[DM0=0] @ launch+28 (rta) / +30
-            // (crta); kernel_text_offset[DM0=0] @ launch+52.
-            //
-            // ONLY for ACTIVE eth cores (those with an inter-chip peer, running the active-erisc app).
-            // An IDLE eth core posts the same GO to 0x590 but is launched by the idle-erisc base FW,
-            // which reads kernel_config_base[IDLE_ETH] (index 2), not [ACTIVE_ETH] -- and ttsim runs
-            // its kernel via the soft-reset / ierisc_reset_pc path instead (see SOFT_RESET_0 above).
-            // Intercepting an idle core's GO here would jump to a bogus ACTIVE_ETH entry (e.g. on a
-            // single-chip part every eth core is idle: regression at b0bca86). So gate on eth_peer and
-            // otherwise fall through to the plain mailbox store.
-            uint32_t go_peer_chip, go_peer_tile;
-            if (addr == 0x590 && size == 4 && (mem_rd<uint32_t>(p) >> 24) == 0x80 &&
-                eth_peer(tile_id, &go_peer_chip, &go_peer_tile)) {
-                memcpy(&g_e_tiles[tile_id].sram[addr], p, size);
-                const uint8_t *l1 = g_e_tiles[tile_id].sram;
-                uint32_t rd_ptr = mem_rd<uint32_t>(&l1[0x100 + 12]);
-                uint32_t launch = 0x100 + 16 + rd_ptr * 144;
-                uint32_t kcfg_base = mem_rd<uint32_t>(&l1[launch + 4]); // kernel_config_base[ACTIVE_ETH]
-                uint32_t entry = kcfg_base + mem_rd<uint32_t>(&l1[launch + 52]);
-                // The base FW runs setup_kernel_launch_args() (firmware_common.h) before jumping: it
-                // sets the kernel's rta_l1_base / crta_l1_base globals from the launch message so
-                // get_arg_val() / get_common_arg_val() find the runtime args. Without it both stay 0
-                // and every get_arg_val() reads L1 address 0 (e.g. the fabric router's per-channel
-                // connection_live_semaphore comes back null and the worker data path hangs). These
-                // FW-owned LDM globals sit below the kernel's .bss so crt0 never clears them; their
-                // addresses are the active-erisc FW/kernel ABI: rta_l1_base @ 0xFFB0070C, crta @ 0xFFB00708.
-                // these offsets are only for single-erisc mode - multi-erisc will fail if this is reached.
-                uint8_t *ldm = g_e_tiles[tile_id].rv32_local_ram[0];
-                mem_wr<uint32_t>(&ldm[0xFFB0070C - RISCV_LOCAL_MEM_BASE], kcfg_base + mem_rd<uint16_t>(&l1[launch + 28]));
-                mem_wr<uint32_t>(&ldm[0xFFB00708 - RISCV_LOCAL_MEM_BASE], kcfg_base + mem_rd<uint16_t>(&l1[launch + 30]));
-                // Likewise fake firmware risc_init()'s my_x[]/my_y[] (FW-owned LDM globals my_y @ 0xFFB00700,
-                // my_x @ 0xFFB00704, each uint8_t[NUM_NOCS]). risc_init sets my_x[n]/my_y[n] from
-                // NOC_CFG(NOC_ID_LOGICAL); the kernel later writes WorkerXY(my_x[0], my_y[0]) into a peer EDM's
-                // connection info at connect (edm_fabric_worker_adapters.hpp), and the peer credits back to that
-                // coord. Without this they stay 0, so the fabric router's free-space credit targets NOC (0,0)
-                // (DRAM) -- the multi-hop forwarding hang/abort. NOC_ID_LOGICAL here matches NOC_REGS_NOC_ID_LOGICAL.
-                uint32_t nidl = (20 + tile_id) | (25 << 6); // logical eth coord (20+tile_id, 25), both NOCs
-                for (uint32_t n = 0; n < 2; n++) { // NUM_NOCS == 2 on BH
-                    ldm[(0xFFB00704 - RISCV_LOCAL_MEM_BASE) + n] = nidl & 0x3F;        // my_x[n]
-                    ldm[(0xFFB00700 - RISCV_LOCAL_MEM_BASE) + n] = (nidl >> 6) & 0x3F; // my_y[n]
-                }
-                g_e_tiles[tile_id].rv32[0].pc = entry;
-                g_e_tiles[tile_id].rv32[0].x_regs[1] = 0; // ra=0: kernel_main returns here on exit
-                g_e_tiles[tile_id].rv32[0].x_regs[2] = 0xFFB02000; // sp = top of eth LDM
-                g_e_tiles[tile_id].rv32[0].x_regs[3] = 0xFFB00EF0; // gp = __global_pointer$
-                ttsim_rv32_set_core_active('E', tile_id, 0, true);
-                return;
-            }
             if (addr == 0x7D000 || addr == 0x7D010 || addr == 0x7D020 || addr == 0x7D030) { // ETH_MAILBOX
                 TTSIM_VERIFY(size == 4, UnimplementedFunctionality, "ETH_MAILBOX size=0x%x", size);
+                // The eth base fw (fw/eth/bh_eth_fw.c) services only ETH_MSG_CALL | ETH_MSG_RELEASE_CORE.
                 uint32_t data = mem_rd<uint32_t>(p);
-                if (data == 0xCA110002) { // ETH_MSG_CALL and ETH_MSG_RELEASE_CORE
-                    TTSIM_ERROR(UntestedFunctionality, "Blackhole multi-erisc mode");
-                    uint8_t *mailbox = &g_e_tiles[tile_id].sram[addr];
-                    g_e_tiles[tile_id].rv32[0].pc = mem_rd<uint32_t>(mailbox + 4);
-                    g_e_tiles[tile_id].rv32[0].x_regs[2] = 0xFFB02000;
-                    mem_wr<uint32_t>(mailbox + 0, 0xD0E50002); // ETH_MSG_DONE
-                    mem_wr<uint32_t>(mailbox + 4, 0);
-                    mem_wr<uint32_t>(mailbox + 8, 0);
-                    mem_wr<uint32_t>(mailbox + 12, 0);
-                    ttsim_rv32_set_core_active('E', tile_id, 0, true);
-                    return;
-                } else {
-                    TTSIM_ERROR(UnimplementedFunctionality, "ETH_MAILBOX data=0x%x", data);
-                }
-            } else if (addr == 0x7E8) { // Metal ETH_FW_RUN_FLAG
-                TTSIM_VERIFY(size == 4, UnimplementedFunctionality, "Metal ETH_FW_RUN_FLAG size=0x%x", size);
-                uint32_t data = mem_rd<uint32_t>(p);
-                if (!data && mem_rd<uint32_t>(&g_e_tiles[tile_id].sram[addr])) {
-                    ttsim_rv32_set_core_active('E', tile_id, 0, false);
-                    g_e_tiles[tile_id].ierisc_reset_pc = 0; // Reset back to guard value for BH base fw
-                }
+                TTSIM_VERIFY(data == 0xCA110002, UnsupportedFunctionality, "ETH_MAILBOX data=0x%x", data);
             }
 #endif
             memcpy(&g_e_tiles[tile_id].sram[addr], p, size);

@@ -50,7 +50,7 @@ def rules(ctx):
         ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', chip, '--out', target])
         chip_gen_h_files[chip] = gen_h_files + [target]
 
-        if tt_arch_version == 0:
+        if tt_arch_version <= 1:
             script = 'gen_fw_blob.py'
             for name in ('eth_fw',):
                 target = f'_out/{chip}/{name}_blob.h'

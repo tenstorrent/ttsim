@@ -798,22 +798,6 @@ static void clock_current_chip() {
         uint32_t tile_id = core_index / RV32_CORES_PER_E_TILE;
         uint32_t rv32_index = core_index % RV32_CORES_PER_E_TILE;
         auto *p_hart = &g_e_tiles[tile_id].rv32[rv32_index];
-#if TT_ARCH_VERSION == 1
-        // The active-erisc app kernel tail-calls kernel_main; on exit (e.g. fabric teardown /
-        // reconfig in the same process) it returns to ra. ttsim's faked base-FW launch leaves ra=0,
-        // so the kernel returns to pc=0 -- the base-FW guard value (see ierisc_reset_pc in tile.cpp).
-        // On silicon the kernel lands back in the persistent base FW and idles until the next
-        // RUN_MSG_GO; emulate that by parking the core (reactivated by the next GO) instead of
-        // executing the 0x0 guard as an illegal instruction. The base FW also flips the go-message
-        // signal to RUN_MSG_DONE (0) so the host (llrt::wait_until_cores_done, polling the GO_MSG
-        // mailbox at L1 0x590) sees the program complete; mimic that by clearing the signal byte.
-        // Rare (once per kernel return); [[unlikely]] keeps it off the hot per-instruction path.
-        if (!p_hart->pc) [[unlikely]] {
-            ttsim_rv32_set_core_active('E', tile_id, rv32_index, false);
-            g_e_tiles[tile_id].sram[0x590 + 3] = 0; // go_messages[0].signal = RUN_MSG_DONE
-            continue;
-        }
-#endif
         rv32_step(p_hart);
     }
 }

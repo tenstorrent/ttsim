@@ -210,6 +210,7 @@ struct TensixAddrCtrl {
 
 struct TensixState {
     uint32_t tile_id;
+    uint32_t tensix_id;
 
     uint32_t inst_pipes_active;
     uint32_t inst[TENSIX_INST_PIPES][TENSIX_INST_FIFO_SIZE];
@@ -584,7 +585,7 @@ void rv32_step(Rv32HartState *p_hart);
 void rv64_init(Rv64HartState *p_hart, char tile_type, uint32_t tile_id, uint32_t riscv_id);
 void rv64_step(Rv64HartState *p_hart);
 
-void tensix_init(TensixState *p_tensix, uint32_t tile_id);
+void tensix_init(TensixState *p_tensix, uint32_t tile_id, uint32_t tensix_id);
 bool tensix_can_push_inst(TensixState *p_tensix, uint32_t pipe);
 void tensix_push_inst(TensixState *p_tensix, uint32_t pipe, uint32_t inst, bool bypass_mop_expander);
 uint32_t tensix_cfg_rd32(TensixState *p_tensix, uint32_t bank, uint32_t offset);

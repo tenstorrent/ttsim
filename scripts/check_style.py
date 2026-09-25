@@ -9,6 +9,7 @@ import re
 
 # Only files that come from external teams/orgs should go in this list
 skip_files = {
+    'data/bh/eth_fw.bin',
     'data/wh/eth_fw.bin',
 }
 
