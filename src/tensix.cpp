@@ -530,6 +530,10 @@ static inline void math_update_rwc(uint32_t *p_rwc, uint32_t *p_rwc_cr, uint32_t
     }
 }
 
+[[maybe_unused]] static inline uint32_t math_src_rwc(uint32_t row) {
+    return row; // SRC_RWC_ROWS is equal to SRC_ROWS
+}
+
 static uint32_t math_srca_format(const TensixState *p_tensix, const TensixConfigState *p_config,
                                  uint32_t pipe, uint32_t bank) {
 #if TT_ARCH_VERSION >= 1
@@ -670,6 +674,28 @@ static inline void write_dst16b(TensixState *p_tensix, uint32_t row, uint32_t co
     if (!set_valid_on_last_column_only || (col == 15)) {
         p_tensix->dst_row_valid[row] = true;
     }
+}
+
+#define SFPU_CELL_DEST 2
+
+static inline uint16_t sfpu_read_cell16(TensixState *p_tensix, uint32_t bank, uint32_t row, uint32_t col) {
+    TTSIM_ASSERT(bank == SFPU_CELL_DEST);
+    return read_dst16b(p_tensix, row, col);
+}
+
+static inline uint32_t sfpu_read_cell32(TensixState *p_tensix, uint32_t bank, uint32_t row, uint32_t col) {
+    TTSIM_ASSERT(bank == SFPU_CELL_DEST);
+    return read_dst32b(p_tensix, row, col);
+}
+
+static inline void sfpu_write_cell16(TensixState *p_tensix, uint32_t bank, uint32_t row, uint32_t col, uint16_t data) {
+    TTSIM_ASSERT(bank == SFPU_CELL_DEST);
+    write_dst16b(p_tensix, row, col, data);
+}
+
+static inline void sfpu_write_cell32(TensixState *p_tensix, uint32_t bank, uint32_t row, uint32_t col, uint32_t data) {
+    TTSIM_ASSERT(bank == SFPU_CELL_DEST);
+    write_dst32b(p_tensix, row, col, data);
 }
 
 static inline uint16_t dst_decode_bf16(uint16_t x) {
@@ -880,8 +906,9 @@ TENSIX_EXECUTE_MOVD2B() {
 
 TENSIX_EXECUTE_MOVB2A() {
     TTSIM_VERIFY(instr_mod == 2, UnsupportedFunctionality, "instr_mod=%d", instr_mod);
-    TTSIM_VERIFY(!(srcb & 3), UnsupportedFunctionality, "srcb=%d", srcb);
-    TTSIM_VERIFY(!(srca & 3), UnsupportedFunctionality, "srca=%d", srca);
+    uint32_t n_rows = 4;
+    TTSIM_VERIFY(!(srcb & (n_rows - 1)), UnsupportedFunctionality, "srcb=%d", srcb);
+    TTSIM_VERIFY(!(srca & (n_rows - 1)), UnsupportedFunctionality, "srca=%d", srca);
     uint32_t src_b_bank = p_tensix->src_b_matrix_bank;
     if (!(p_tensix->src_b_valid & (1 << src_b_bank))) {
         return false; // stall until SrcB valid
@@ -898,9 +925,8 @@ TENSIX_EXECUTE_MOVB2A() {
     uint32_t src_a_bank = p_tensix->src_a_matrix_bank;
     uint32_t src_a_row = srca + p_tensix->src_a_rwc[pipe];
     uint32_t src_b_row = srcb + p_tensix->src_b_rwc[pipe];
-    TTSIM_VERIFY(!(src_a_row & 3) && (src_a_row < SRC_ROWS), UnsupportedFunctionality, "src_a_row=%d", src_a_row);
-    TTSIM_VERIFY(!(src_b_row & 3) && (src_b_row < SRC_ROWS), UnsupportedFunctionality, "src_b_row=%d", src_b_row);
-    uint32_t n_rows = (instr_mod == 2) ? 4 : 1;
+    TTSIM_VERIFY(!(src_a_row & (n_rows - 1)) && (src_a_row < SRC_ROWS), UnsupportedFunctionality, "src_a_row=%d", src_a_row);
+    TTSIM_VERIFY(!(src_b_row & (n_rows - 1)) && (src_b_row < SRC_ROWS), UnsupportedFunctionality, "src_b_row=%d", src_b_row);
     for (uint32_t row = 0; row < n_rows; row++) {
         for (uint32_t col = 0; col < ROW_SIZE; col++) {
             uint32_t value = p_tensix->src_b[src_b_bank][src_b_row + row][col];
@@ -3531,6 +3557,7 @@ TENSIX_EXECUTE_SFPLOAD() {
         }
     }
 
+    uint32_t cell_bank = SFPU_CELL_DEST;
     // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + math_dest_offset(p_tensix, p_config, pipe);
     dst_row &= DST_ROWS - 1;
@@ -3542,7 +3569,7 @@ TENSIX_EXECUTE_SFPLOAD() {
         uint32_t col = 2*(lane & 7) + ((dst_row & 2) >> 1);
         uint32_t value;
         if (instr_mod0 == 1) {
-            value = read_dst16b(p_tensix, row, col);
+            value = sfpu_read_cell16(p_tensix, cell_bank, row, col);
             uint32_t s = value >> 15;
             uint32_t e = value & 31;
             uint32_t m = (value >> 5) & 1023;
@@ -3553,25 +3580,25 @@ TENSIX_EXECUTE_SFPLOAD() {
             value = (s << 31) | (e << 23) | (m << 13);
         } else
         if (instr_mod0 == 2) {
-            value = dst_decode_bf16(read_dst16b(p_tensix, row, col));
+            value = dst_decode_bf16(sfpu_read_cell16(p_tensix, cell_bank, row, col));
             value <<= 16;
         } else if ((instr_mod0 == 3) || (instr_mod0 == 4)) {
-            value = dst_decode_fp32(read_dst32b(p_tensix, row, col));
+            value = dst_decode_fp32(sfpu_read_cell32(p_tensix, cell_bank, row, col));
         } else if (instr_mod0 == 6) {
-            value = read_dst16b(p_tensix, row, col);
+            value = sfpu_read_cell16(p_tensix, cell_bank, row, col);
         } else
         if (instr_mod0 == 12) {
-            value = dst_decode_fp32(read_dst32b(p_tensix, row, col));
+            value = dst_decode_fp32(sfpu_read_cell32(p_tensix, cell_bank, row, col));
 #if TT_ARCH_VERSION == 0
             if (value & 0x80000000) {
                 value = -int32_t(value & 0x7FFFFFFF);
             }
 #endif
         } else if (instr_mod0 == 14) {
-            value = (p_tensix->l_regs[lreg_ind][lane] & 0xFFFF0000) | uint32_t(read_dst16b(p_tensix, row, col));
+            value = (p_tensix->l_regs[lreg_ind][lane] & 0xFFFF0000) | uint32_t(sfpu_read_cell16(p_tensix, cell_bank, row, col));
         } else
         if (instr_mod0 == 15) {
-            value = (uint32_t(read_dst16b(p_tensix, row, col)) << 16) | (p_tensix->l_regs[lreg_ind][lane] & 0xFFFF);
+            value = (uint32_t(sfpu_read_cell16(p_tensix, cell_bank, row, col)) << 16) | (p_tensix->l_regs[lreg_ind][lane] & 0xFFFF);
         } else {
             TTSIM_ERROR(AssertionFailure, "instr_mod0=%d", instr_mod0);
         }
@@ -3666,6 +3693,7 @@ TENSIX_EXECUTE_SFPSTORE() {
         }
     }
 
+    uint32_t cell_bank = SFPU_CELL_DEST;
     // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + math_dest_offset(p_tensix, p_config, pipe);
     dst_row &= DST_ROWS - 1;
@@ -3677,33 +3705,33 @@ TENSIX_EXECUTE_SFPSTORE() {
         uint32_t col = 2*(lane & 7) + ((dst_row & 2) >> 1);
         uint32_t value = p_tensix->l_regs[lreg_ind][lane];
         if (instr_mod0 == 1) {
-            write_dst16b(p_tensix, row, col, dst_encode_fp16(sfpu_store_to_fp16(value)));
+            sfpu_write_cell16(p_tensix, cell_bank, row, col, dst_encode_fp16(sfpu_store_to_fp16(value)));
         } else
         if (instr_mod0 == 2) {
             value = denormals_as_zeros(value);
-            write_dst16b(p_tensix, row, col, dst_encode_bf16(value >> 16));
+            sfpu_write_cell16(p_tensix, cell_bank, row, col, dst_encode_bf16(value >> 16));
         } else if (instr_mod0 == 3) {
             value = denormals_as_zeros(value);
-            write_dst32b(p_tensix, row, col, dst_encode_fp32(value));
+            sfpu_write_cell32(p_tensix, cell_bank, row, col, dst_encode_fp32(value));
         } else if (instr_mod0 == 4) {
-            write_dst32b(p_tensix, row, col, dst_encode_fp32(value));
+            sfpu_write_cell32(p_tensix, cell_bank, row, col, dst_encode_fp32(value));
         } else
         if ((instr_mod0 == 6) || (instr_mod0 == 14)) {
-            write_dst16b(p_tensix, row, col, value & 0xFFFF);
+            sfpu_write_cell16(p_tensix, cell_bank, row, col, value & 0xFFFF);
         } else
         if (instr_mod0 == 7) {
-            write_dst32b(p_tensix, row, col, value);
+            sfpu_write_cell32(p_tensix, cell_bank, row, col, value);
         } else if (instr_mod0 == 9) {
-            write_dst32b(p_tensix, row, col, (value << 16) | (value >> 16));
+            sfpu_write_cell32(p_tensix, cell_bank, row, col, (value << 16) | (value >> 16));
         } else if (instr_mod0 == 12) {
 #if TT_ARCH_VERSION == 0
             if (value & 0x80000000) {
                 value = 0x80000000 | uint32_t(-int32_t(value));
             }
 #endif
-            write_dst32b(p_tensix, row, col, dst_encode_fp32(value));
+            sfpu_write_cell32(p_tensix, cell_bank, row, col, dst_encode_fp32(value));
         } else if (instr_mod0 == 15) {
-            write_dst16b(p_tensix, row, col, value >> 16);
+            sfpu_write_cell16(p_tensix, cell_bank, row, col, value >> 16);
         } else {
             TTSIM_ERROR(AssertionFailure, "instr_mod0=%d", instr_mod0);
         }
@@ -4419,6 +4447,7 @@ TENSIX_EXECUTE_SFPSETSGN() {
 }
 
 TENSIX_EXECUTE_SFPENCC() {
+    TTSIM_VERIFY(!(instr_mod1 & 4), NonContractualBehavior, "instr_mod1=%d", instr_mod1);
     TTSIM_VERIFY(!lreg_dest, UnsupportedFunctionality, "lreg_dest=%d", lreg_dest);
 
     switch (instr_mod1) {
@@ -4431,7 +4460,7 @@ TENSIX_EXECUTE_SFPENCC() {
             p_tensix->cc_en = imm12_math & 1;
             break;
         default:
-            TTSIM_ERROR(UnimplementedFunctionality, "instr_mod1=%d", instr_mod1);
+            TTSIM_ERROR(UnsupportedFunctionality, "instr_mod1=%d", instr_mod1);
     }
     return true;
 }
@@ -4478,6 +4507,7 @@ TENSIX_EXECUTE_SFPXOR() {
 }
 
 TENSIX_EXECUTE_SFP_STOCH_RND() {
+    TTSIM_VERIFY(rnd_mode != 1, UnsupportedFunctionality, "stochastic rounding is explicitly out of scope");
     TTSIM_VERIFY((instr_mod1 <= 7) || (instr_mod1 == 12) || (instr_mod1 == 13), UndefinedBehavior, "instr_mod1=%d", instr_mod1);
     TTSIM_VERIFY((instr_mod1 == 1) || (instr_mod1 == 2) || (instr_mod1 == 3) || (instr_mod1 == 6) || (instr_mod1 == 7),
         UnimplementedFunctionality, "instr_mod1=%d", instr_mod1);
@@ -4816,10 +4846,10 @@ TENSIX_EXECUTE_SFPLE() {
             p_tensix->l_regs[lreg_dest][lane] = is_le ? 0xFFFFFFFF : 0;
         }
     });
-    return true;
 #else
     TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
 #endif
+    return true;
 }
 
 TENSIX_EXECUTE_SFPGT() {

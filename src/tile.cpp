@@ -2242,10 +2242,11 @@ static bool t_tile_mmio_wr32(uint32_t tile_id, uint32_t riscv_id, uint64_t addr,
             return tensix_mailbox_wr32(tile_id, riscv_id, 2, addr - TENSIX_MAILBOX2_BASE, data);
         case TENSIX_MAILBOX3_BASE ... TENSIX_MAILBOX3_LIMIT:
             return tensix_mailbox_wr32(tile_id, riscv_id, 3, addr - TENSIX_MAILBOX3_BASE, data);
-        case TENSIX_CFG_BASE ... TENSIX_CFG_LIMIT:
+        case TENSIX_CFG_BASE ... TENSIX_CFG_LIMIT: {
             TTSIM_VERIFY(riscv_id < 4, UnimplementedFunctionality, "riscv_id=%d", riscv_id); // note that this intentionally excludes NCRISC on WH/BH
             tensix_cfg_wr32(&g_t_tiles[tile_id].tensix[0], 0, addr - TENSIX_CFG_BASE, data);
             return true;
+        }
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "addr=0x%llx", addr);
     }
