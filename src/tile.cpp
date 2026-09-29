@@ -28,9 +28,7 @@ static constexpr uint32_t logical_harvesting_mask(uint32_t chip_id) {
     TTSIM_ASSERT(chip_id < NUM_CHIPS);
 #if TT_ARCH_VERSION == 0
 #if NUM_CHIPS == 1
-    // proper harvest mask breaks metal tests for n150
-    // constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {0x40}; // N150
-    constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {0x0}; // N150
+    constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {0x40}; // N150
 #elif NUM_CHIPS == 2
     constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {0x41, 0x05}; // N300
 #elif NUM_CHIPS == 8
@@ -44,9 +42,7 @@ static constexpr uint32_t logical_harvesting_mask(uint32_t chip_id) {
     return LOGICAL_HARVESTING_MASKS[chip_id];
 #else
 #if NUM_CHIPS == 1
-    // proper harvest mask breaks metal tests for p150
-    // constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {0xC0}; // P150
-    constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {0x0}; // P150
+    constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {0xC0}; // P150
 #elif NUM_CHIPS == 2
     constexpr uint32_t LOGICAL_HARVESTING_MASKS[] = {0x2080, 0x110}; // P300
 #elif NUM_CHIPS == 4

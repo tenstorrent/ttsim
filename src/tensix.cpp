@@ -544,6 +544,16 @@ static uint32_t math_srca_format(const TensixState *p_tensix, const TensixConfig
     return p_config->ALU_FORMAT_SPEC_REG_SrcA_override ? p_config->ALU_FORMAT_SPEC_REG_SrcA_val : p_config->ALU_FORMAT_SPEC_REG0_SrcA;
 }
 
+static uint32_t math_srcb_format(const TensixState *p_tensix, const TensixConfigState *p_config,
+                                 uint32_t pipe, uint32_t bank) {
+#if TT_ARCH_VERSION >= 1
+    if (!math_disable_implied_srcb_fmt(p_tensix, pipe)) {
+        return p_tensix->src_b_format[bank];
+    }
+#endif
+    return p_config->ALU_FORMAT_SPEC_REG_SrcB_override ? p_config->ALU_FORMAT_SPEC_REG_SrcB_val : p_config->ALU_FORMAT_SPEC_REG1_SrcB;
+}
+
 // note addr_mode is 2 bits in WH and 3 bits in BH; accessing higher address modes requires bias on WH
 // XXX switch statement is clunky and perhaps slow; would be better if these were stored as an array
 // could hack this by hardcoding the fact that bit positions are all the same?
@@ -917,7 +927,7 @@ TENSIX_EXECUTE_MOVB2A() {
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
 #if TT_ARCH_VERSION == 0
-    uint32_t src_b_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcB_override ? p_config->ALU_FORMAT_SPEC_REG_SrcB_val : p_config->ALU_FORMAT_SPEC_REG1_SrcB;
+    uint32_t src_b_fmt = math_srcb_format(p_tensix, p_config, pipe, src_b_bank);
     TTSIM_VERIFY((src_b_fmt != 12) && (src_b_fmt != 13), UndefinedBehavior, "src_b_fmt=%d", src_b_fmt);
 #endif
     bool flush_denormals = !p_config->ALU_ACC_CTRL_Zero_Flag_disabled_src;
@@ -1057,12 +1067,7 @@ TENSIX_EXECUTE_MOVA2D() {
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
     // Note: FP16A_FORCE_Enable (thread_cfg56/55) is not instantiated and errors on write; always 0
-    uint32_t src_a_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcA_override ? p_config->ALU_FORMAT_SPEC_REG_SrcA_val : p_config->ALU_FORMAT_SPEC_REG0_SrcA;
-#if TT_ARCH_VERSION >= 1
-    if (!math_disable_implied_srca_fmt(p_tensix, pipe)) {
-        src_a_fmt = p_tensix->src_a_format[src_a_bank];
-    }
-#endif
+    uint32_t src_a_fmt = math_srca_format(p_tensix, p_config, pipe, src_a_bank);
     TTSIM_VERIFY((src_a_fmt != 12) && (src_a_fmt != 13), UndefinedBehavior, "src_a_fmt=%d", src_a_fmt);
     if ((TT_ARCH_VERSION == 1) && p_config->ALU_ACC_CTRL_Fp32_enabled && !dest_32b_lo) {
         src_a_fmt = 4;
@@ -1130,7 +1135,7 @@ TENSIX_EXECUTE_MOVB2D() {
     // Note: FP16A_FORCE_Enable (thread_cfg56/55) is not instantiated and errors on write; always 0
     uint32_t src_a_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcA_override ? p_config->ALU_FORMAT_SPEC_REG_SrcA_val : p_config->ALU_FORMAT_SPEC_REG0_SrcA;
 #if TT_ARCH_VERSION == 0
-    uint32_t src_b_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcB_override ? p_config->ALU_FORMAT_SPEC_REG_SrcB_val : p_config->ALU_FORMAT_SPEC_REG1_SrcB;
+    uint32_t src_b_fmt = math_srcb_format(p_tensix, p_config, pipe, src_b_bank);
     TTSIM_VERIFY((src_b_fmt != 12) && (src_b_fmt != 13), UndefinedBehavior, "src_b_fmt=%d", src_b_fmt);
 #endif
 #if TT_ARCH_VERSION >= 1
@@ -1536,16 +1541,8 @@ static bool tensix_matmul_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst,
     const TensixConfigState *p_config = &p_tensix->config[state_id];
     // Note: FP16A_FORCE_Enable (thread_cfg56/55) is not instantiated and errors on write; always 0
     bool is_int8 = p_config->ALU_ACC_CTRL_INT8_math_enabled;
-    uint32_t src_a_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcA_override ? p_config->ALU_FORMAT_SPEC_REG_SrcA_val : p_config->ALU_FORMAT_SPEC_REG0_SrcA;
-    uint32_t src_b_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcB_override ? p_config->ALU_FORMAT_SPEC_REG_SrcB_val : p_config->ALU_FORMAT_SPEC_REG1_SrcB;
-#if TT_ARCH_VERSION >= 1
-    if (!math_disable_implied_srca_fmt(p_tensix, pipe)) {
-        src_a_fmt = p_tensix->src_a_format[src_a_bank];
-    }
-    if (!math_disable_implied_srcb_fmt(p_tensix, pipe)) {
-        src_b_fmt = p_tensix->src_b_format[src_b_bank];
-    }
-#endif
+    uint32_t src_a_fmt = math_srca_format(p_tensix, p_config, pipe, src_a_bank);
+    uint32_t src_b_fmt = math_srcb_format(p_tensix, p_config, pipe, src_b_bank);
     TTSIM_VERIFY((src_a_fmt != 12) && (src_a_fmt != 13), UndefinedBehavior, "src_a_fmt=%d", src_a_fmt);
     TTSIM_VERIFY((src_b_fmt != 12) && (src_b_fmt != 13), UndefinedBehavior, "src_b_fmt=%d", src_b_fmt);
     if (is_int8) {
@@ -1731,16 +1728,8 @@ static bool tensix_elw_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst, ui
     const TensixConfigState *p_config = &p_tensix->config[state_id];
     // Note: FP16A_FORCE_Enable (thread_cfg56/55) is not instantiated and errors on write; always 0
     bool is_int8 = p_config->ALU_ACC_CTRL_INT8_math_enabled;
-    uint32_t src_a_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcA_override ? p_config->ALU_FORMAT_SPEC_REG_SrcA_val : p_config->ALU_FORMAT_SPEC_REG0_SrcA;
-    uint32_t src_b_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcB_override ? p_config->ALU_FORMAT_SPEC_REG_SrcB_val : p_config->ALU_FORMAT_SPEC_REG1_SrcB;
-#if TT_ARCH_VERSION >= 1
-    if (!math_disable_implied_srca_fmt(p_tensix, pipe)) {
-        src_a_fmt = p_tensix->src_a_format[src_a_bank];
-    }
-    if (!math_disable_implied_srcb_fmt(p_tensix, pipe)) {
-        src_b_fmt = p_tensix->src_b_format[src_b_bank];
-    }
-#endif
+    uint32_t src_a_fmt = math_srca_format(p_tensix, p_config, pipe, src_a_bank);
+    uint32_t src_b_fmt = math_srcb_format(p_tensix, p_config, pipe, src_b_bank);
     TTSIM_VERIFY((src_a_fmt != 12) && (src_a_fmt != 13), UndefinedBehavior, "src_a_fmt=%d", src_a_fmt);
     TTSIM_VERIFY((src_b_fmt != 12) && (src_b_fmt != 13), UndefinedBehavior, "src_b_fmt=%d", src_b_fmt);
     if (is_int8) {
@@ -1870,16 +1859,8 @@ TENSIX_EXECUTE_GMPOOL() {
     const TensixConfigState *p_config = &p_tensix->config[state_id];
     // Note: FP16A_FORCE_Enable (thread_cfg56/55) is not instantiated and errors on write; always 0
     TTSIM_VERIFY(!p_config->ALU_ACC_CTRL_INT8_math_enabled, UnsupportedFunctionality, "ALU_ACC_CTRL_INT8_math_enabled");
-    uint32_t src_a_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcA_override ? p_config->ALU_FORMAT_SPEC_REG_SrcA_val : p_config->ALU_FORMAT_SPEC_REG0_SrcA;
-    uint32_t src_b_fmt = p_config->ALU_FORMAT_SPEC_REG_SrcB_override ? p_config->ALU_FORMAT_SPEC_REG_SrcB_val : p_config->ALU_FORMAT_SPEC_REG1_SrcB;
-#if TT_ARCH_VERSION >= 1
-    if (!math_disable_implied_srca_fmt(p_tensix, pipe)) {
-        src_a_fmt = p_tensix->src_a_format[src_a_bank];
-    }
-    if (!math_disable_implied_srcb_fmt(p_tensix, pipe)) {
-        src_b_fmt = p_tensix->src_b_format[src_b_bank];
-    }
-#endif
+    uint32_t src_a_fmt = math_srca_format(p_tensix, p_config, pipe, src_a_bank);
+    uint32_t src_b_fmt = math_srcb_format(p_tensix, p_config, pipe, src_b_bank);
     TTSIM_VERIFY((src_a_fmt != 12) && (src_a_fmt != 13), UndefinedBehavior, "src_a_fmt=%d", src_a_fmt);
     TTSIM_VERIFY((src_b_fmt != 12) && (src_b_fmt != 13), UndefinedBehavior, "src_b_fmt=%d", src_b_fmt);
     TTSIM_VERIFY((src_a_fmt == 0) || (src_a_fmt == 4) || (src_a_fmt == 5) || (src_a_fmt == 6) || (src_a_fmt == 7),
@@ -2923,6 +2904,9 @@ TENSIX_EXECUTE_UNPACR() {
                            (p_addr_ctrl->ch0_y & 0xFF) * ch0_y_stride +
                            (p_addr_ctrl->ch0_z & 0xFF) * ch0_z_stride +
                            (p_addr_ctrl->ch0_w & 0xFF) * ch0_w_stride;
+    if (bfp_exp_stream) {
+        TTSIM_VERIFY(!(first_datum & 15), UndefinedBehavior, "bfp_exp_stream: misaligned first_datum=0x%x", first_datum);
+    }
     in_addr_exponents += first_datum; // 1/16 of a byte per datum
     uint32_t src_addr_bits = (base_addr << 3) + first_datum * in_element_size_bits;
     if (haloize || tileize) {
@@ -3715,11 +3699,9 @@ TENSIX_EXECUTE_SFPSTORE() {
             sfpu_write_cell32(p_tensix, cell_bank, row, col, dst_encode_fp32(value));
         } else if (instr_mod0 == 4) {
             sfpu_write_cell32(p_tensix, cell_bank, row, col, dst_encode_fp32(value));
-        } else
-        if ((instr_mod0 == 6) || (instr_mod0 == 14)) {
+        } else if ((instr_mod0 == 6) || (instr_mod0 == 14)) {
             sfpu_write_cell16(p_tensix, cell_bank, row, col, value & 0xFFFF);
-        } else
-        if (instr_mod0 == 7) {
+        } else if (instr_mod0 == 7) {
             sfpu_write_cell32(p_tensix, cell_bank, row, col, value);
         } else if (instr_mod0 == 9) {
             sfpu_write_cell32(p_tensix, cell_bank, row, col, (value << 16) | (value >> 16));
@@ -4114,35 +4096,26 @@ TENSIX_EXECUTE_SFPSETCC() {
     TTSIM_VERIFY(!(instr_mod1 & 1) && (instr_mod1 <= 6), UnsupportedFunctionality, "instr_mod1=%d", instr_mod1);
     TTSIM_VERIFY(!lreg_dest, UnsupportedFunctionality, "lreg_dest=%d", lreg_dest);
     TTSIM_VERIFY(!imm12_math, UnsupportedFunctionality, "imm12_math=%d", imm12_math);
+    bool sign_magnitude = false;
 
     TTSIM_VERIFY(p_tensix->cc_en, UnsupportedFunctionality, "cc_en=%d", p_tensix->cc_en); // very strange behavior that clears all CC bits
     uint32_t mask = p_tensix->cc;
     for_each_lane(mask, [=](uint32_t lane) {
-        int32_t src = p_tensix->l_regs[lreg_c][lane];
-        if (instr_mod1 == 0) {
-            if (src < 0) {
-                p_tensix->cc |= 1 << lane;
-            } else {
-                p_tensix->cc &= ~(1 << lane);
-            }
-        } else if (instr_mod1 == 2) {
-            if (src != 0) {
-                p_tensix->cc |= 1 << lane;
-            } else {
-                p_tensix->cc &= ~(1 << lane);
-            }
-        } else if (instr_mod1 == 4) {
-            if (src >= 0) {
-                p_tensix->cc |= 1 << lane;
-            } else {
-                p_tensix->cc &= ~(1 << lane);
-            }
-        } else { // instr_mod1 == 6
-            if (src == 0) {
-                p_tensix->cc |= 1 << lane;
-            } else {
-                p_tensix->cc &= ~(1 << lane);
-            }
+        uint32_t src = p_tensix->l_regs[lreg_c][lane];
+        bool sign = (src >> 31) != 0;
+        bool cc;
+        if (instr_mod1 & 2) {
+            cc = ((src & 0x7FFFFFFF) != 0) || (!sign_magnitude && sign);
+        } else {
+            cc = sign;
+        }
+        if (instr_mod1 & 4) {
+            cc = !cc;
+        }
+        if (cc) {
+            p_tensix->cc |= 1 << lane;
+        } else {
+            p_tensix->cc &= ~(1 << lane);
         }
     });
     return true;
@@ -4830,7 +4803,6 @@ TENSIX_EXECUTE_SFPLE() {
         TTSIM_VERIFY(lreg_dest < 8, UnsupportedFunctionality, "lreg_dest=%d", lreg_dest);
     }
 
-#if TT_ARCH_VERSION == 1
     uint32_t mask = p_tensix->cc_en ? p_tensix->cc : 0xFFFFFFFF;
     for_each_lane(mask, [=](uint32_t lane) {
         uint32_t c = p_tensix->l_regs[lreg_c][lane];
@@ -4846,9 +4818,6 @@ TENSIX_EXECUTE_SFPLE() {
             p_tensix->l_regs[lreg_dest][lane] = is_le ? 0xFFFFFFFF : 0;
         }
     });
-#else
-    TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
-#endif
     return true;
 }
 
