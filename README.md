@@ -97,6 +97,37 @@ cd $TT_METAL_HOME
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_legacy --gtest_filter=QuasarMeshDeviceSingleCardFixture.SingleDmL1Write
 ```
 
+## Running an LLM with tt-lab
+[tt-lab](https://github.com/tenstorrent/tt-lab) runs gpt-oss-20b or gpt-oss-120b on a virtual
+1-chip or 4-chip Blackhole system. It is a single C++ binary that `dlopen`s `libttsim.so` and
+drives it through the [libttsim API](docs/libttsim_api.md) directly: no TT-Metalium, no compute
+library, nothing between the model and the hardware. The transformer itself - attention, expert
+matvecs, normalization, activations - runs as BRISC firmware inside the Tensix tiles, with all data
+movement written out explicitly.
+
+```bash
+# Build a Blackhole simulator (or release_bh_x4 for the four-chip, 120b mapping):
+./make.py src/_out/release_bh/libttsim.so
+
+# Then, in tt-lab, once its GGUF weights have been requantized into a .ttq sidecar:
+_out/tt-lab run -m ~/models/gpt-oss-20b-MXFP4.gguf \
+    --sim ~/ttsim/src/_out/release_bh/libttsim.so \
+    --ttq ~/models/gpt-oss-20b.ttq -p "Hi" --tiles 8 -n 1 --check
+```
+
+The whole path - GGUF loading, tokenizer, transformer, tile firmware, SFPU kernels - is roughly
+12,000 lines of C++ with no framework underneath it. It is small enough to read end to end, and
+complete enough that doing so leaves you with an entire accelerated inference stack, simple but
+real, from the prompt down to the instructions issued on a Tensix tile.
+
+A host-side bit-exact device proxy acts as the reference: `--check` requires every logit produced
+under `--sim` to match it bit-for-bit, the same standard `ttsim` holds itself to
+[against silicon](#numerical-accuracy). Editing a kernel and re-checking a full 24-layer model
+against an exact reference needs no silicon at all.
+
+See tt-lab's README for model downloads, the requantization step, and its simulator compatibility
+notes.
+
 ## Running ttsim as a QEMU PCI Device
 [ttsim-qemu](https://github.com/tenstorrent/ttsim-qemu) adds a `ttsim` PCI device to `qemu-system-*`
 that exposes `libttsim.so` to a guest VM over PCIe, letting [tt-kmd](https://github.com/tenstorrent/tt-kmd)
