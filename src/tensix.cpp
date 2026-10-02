@@ -3523,10 +3523,10 @@ static inline void for_each_lane(uint32_t mask, Func f) {
 
 TENSIX_EXECUTE_SFPLOAD() {
     TTSIM_VERIFY(!(dest_reg_addr & 1), UnimplementedFunctionality, "dest_reg_addr=%d", dest_reg_addr);
+    TTSIM_VERIFY(lreg_ind < 12, UnimplementedFunctionality, "lreg_ind=%d", lreg_ind);
     TTSIM_VERIFY(!instr_mod0 || (instr_mod0 == 2) || (instr_mod0 == 3) || (instr_mod0 == 4) || (instr_mod0 == 6) ||
                  (instr_mod0 == 12) || (instr_mod0 == 14) || (instr_mod0 == 15),
         UnimplementedFunctionality, "instr_mod0=%d", instr_mod0);
-    TTSIM_VERIFY(lreg_ind < 12, UnimplementedFunctionality, "lreg_ind=%d", lreg_ind);
 
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
@@ -3545,9 +3545,12 @@ TENSIX_EXECUTE_SFPLOAD() {
     }
 
     uint32_t cell_bank = SFPU_CELL_DEST;
-    // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
-    uint32_t dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + math_dest_offset(p_tensix, p_config, pipe);
-    dst_row &= DST_ROWS - 1;
+    uint32_t dst_row;
+    {
+        // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
+        dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + math_dest_offset(p_tensix, p_config, pipe);
+        dst_row &= DST_ROWS - 1;
+    }
     TTSIM_VERIFY(!(dst_row & 1), UnsupportedFunctionality, "dst_row=%d", dst_row);
 
     uint32_t mask = p_tensix->cc_en ? p_tensix->cc : 0xFFFFFFFF;
@@ -3657,10 +3660,10 @@ static uint16_t sfpu_store_to_fp16(uint32_t x) {
 
 TENSIX_EXECUTE_SFPSTORE() {
     TTSIM_VERIFY(!(dest_reg_addr & 1), UnimplementedFunctionality, "dest_reg_addr=%d", dest_reg_addr);
+    TTSIM_VERIFY(lreg_ind < 12, UnimplementedFunctionality, "lreg_ind=%d", lreg_ind); // note some of the constant LRegs can be stored
     TTSIM_VERIFY(!instr_mod0 || (instr_mod0 == 2) || (instr_mod0 == 3) || (instr_mod0 == 4) || (instr_mod0 == 6) || (instr_mod0 == 7) ||
                  (instr_mod0 == 9) || (instr_mod0 == 12) || (instr_mod0 == 14) || (instr_mod0 == 15),
         UnimplementedFunctionality, "instr_mod0=%d", instr_mod0);
-    TTSIM_VERIFY(lreg_ind < 12, UnimplementedFunctionality, "lreg_ind=%d", lreg_ind); // note some of the constant LRegs can be stored
 
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
@@ -3680,9 +3683,12 @@ TENSIX_EXECUTE_SFPSTORE() {
     }
 
     uint32_t cell_bank = SFPU_CELL_DEST;
-    // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
-    uint32_t dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + math_dest_offset(p_tensix, p_config, pipe);
-    dst_row &= DST_ROWS - 1;
+    uint32_t dst_row;
+    {
+        // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
+        dst_row = p_tensix->dst_rwc[pipe] + dest_reg_addr + math_dest_offset(p_tensix, p_config, pipe);
+        dst_row &= DST_ROWS - 1;
+    }
     TTSIM_VERIFY(!(dst_row & 1), UnsupportedFunctionality, "dst_row=%d", dst_row);
 
     uint32_t mask = p_tensix->cc_en ? p_tensix->cc : 0xFFFFFFFF;
@@ -5129,7 +5135,7 @@ TENSIX_EXECUTE_CFGSHIFTMASK() {
 
 TENSIX_DECODERS()
 
-bool tensix_decode_and_execute(TensixState *p_tensix, uint32_t pipe, uint32_t inst) {
+static bool tensix_execute_inst(TensixState *p_tensix, uint32_t pipe, uint32_t inst) {
     uint32_t opcode = bits<31,24>(inst);
     switch (opcode) {
         case 0x70: // SFPLOAD
@@ -5209,4 +5215,8 @@ bool tensix_decode_and_execute(TensixState *p_tensix, uint32_t pipe, uint32_t in
         default: TTSIM_ERROR(UndefinedBehavior, "opcode=0x%x", opcode);
     }
     return true;
+}
+
+bool tensix_decode_and_execute(TensixState *p_tensix, uint32_t pipe, uint32_t inst) {
+    return tensix_execute_inst(p_tensix, pipe, inst);
 }
