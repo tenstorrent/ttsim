@@ -29,8 +29,6 @@ void tensix_init(TensixState *p_tensix, uint32_t tile_id, uint32_t tensix_id) {
         p_tensix->l_regs[14][lane] = 0xBEB08FF9;
         p_tensix->l_regs[15][lane] = lane << 1;
     }
-    p_tensix->cc_en = true;
-    p_tensix->cc = 0xFFFFFFFF;
 }
 
 uint32_t tensix_debug_array_rd32(const TensixState *p_tensix, uint32_t cmd) {
@@ -507,9 +505,7 @@ static inline uint32_t math_fidelity_base(const TensixState *p_tensix, uint32_t 
 static inline uint32_t math_disable_implied_srca_fmt(const TensixState *p_tensix, uint32_t pipe) {
     return p_tensix->thread[pipe].DISABLE_IMPLIED_SRCA_FMT_Base;
 }
-#endif
 
-#if TT_ARCH_VERSION == 1
 static inline uint32_t math_disable_implied_srcb_fmt(const TensixState *p_tensix, uint32_t pipe) {
     return p_tensix->thread[pipe].DISABLE_IMPLIED_SRCB_FMT_Base;
 }
@@ -530,7 +526,7 @@ static inline void math_update_rwc(uint32_t *p_rwc, uint32_t *p_rwc_cr, uint32_t
     }
 }
 
-[[maybe_unused]] static inline uint32_t math_src_rwc(uint32_t row) {
+static inline uint32_t math_src_rwc(uint32_t row) {
     return row; // SRC_RWC_ROWS is equal to SRC_ROWS
 }
 
@@ -799,6 +795,28 @@ static inline uint32_t src_format_mask(uint32_t value, uint32_t fmt) {
     return value;
 }
 #endif
+
+static inline int32_t read_src_int8(uint32_t x) {
+    uint32_t s = x >> 31;
+    int32_t m = (x >> 13) & 0x3FF;
+    return s ? -m : m;
+}
+
+static inline int32_t dst_decode_int32(uint32_t x) {
+    x = dst_decode_fp32(x);
+    int32_t result = x & 0x7FFFFFFF;
+    if (x & 0x80000000) {
+        result = -result;
+    }
+    return result;
+}
+
+static inline uint32_t dst_encode_int32(int32_t x) {
+    if (x & 0x80000000) {
+        x = 0x80000000 | -x; // two's complement to sign/magnitude
+    }
+    return dst_encode_fp32(x);
+}
 
 TENSIX_EXECUTE_MOVD2A() {
     TTSIM_VERIFY(instr_mod == 2, UnsupportedFunctionality, "instr_mod=%d", instr_mod);
@@ -1332,7 +1350,8 @@ static inline int32_t fpu_exp_prod_adj(bool fp32_acc, uint32_t fidelity_phase, b
     return exp_prod_adj;
 }
 
-static uint32_t elwmul(uint32_t a_value, uint32_t b_value, uint32_t dst_value, bool zero_a, bool zero_b, bool fp32_acc, uint32_t fidelity_phase, bool fp_exponent_8b) {
+static uint32_t elwmul(uint32_t a_value, uint32_t b_value, uint32_t dst_value, bool zero_a, bool zero_b, bool fp32_acc,
+                       uint32_t fidelity_phase, bool fp_exponent_8b, bool accumulating) {
     int32_t exp_prod_adj = fpu_exp_prod_adj(fp32_acc, fidelity_phase, fp_exponent_8b);
     int32_t zero_term_exp = std::max(exp_prod_adj, 0); // clamped exponent to apply for computation of shared exponent
 
@@ -1365,7 +1384,8 @@ static uint32_t elwmul(uint32_t a_value, uint32_t b_value, uint32_t dst_value, b
     return fpu_accum_normalize_encode(sign_sop, exp_sop, man_sop, 0, 0, 0, dst_value, fp32_acc, fp_exponent_8b);
 }
 
-static uint32_t elwadd(uint32_t a_value, uint32_t b_value, uint32_t dst_value, bool zero_a, bool zero_b, bool fp32_acc, bool elwadd_accum_en, bool fp_exponent_8b) {
+static uint32_t elwadd(uint32_t a_value, uint32_t b_value, uint32_t dst_value, bool zero_a, bool zero_b, bool fp32_acc,
+                       bool elwadd_accum_en, bool fp_exponent_8b, bool zf_b, bool negate_b) {
     if (zero_a) {
         a_value = 0;
     }
@@ -1490,28 +1510,6 @@ static uint32_t mvmul(const uint32_t *a_values, const uint32_t *b_values, uint32
     return fpu_accum_normalize_encode(sign_sops[0], exp_sops[0], man_sops[0], sign_sops[1], exp_sops[1], man_sops[1], dst_value, fp32_acc, fp_exponent_8b);
 }
 
-static inline int32_t read_src_int8(uint32_t x) {
-    uint32_t s = x >> 31;
-    int32_t m = (x >> 13) & 0x3FF;
-    return s ? -m : m;
-}
-
-static inline int32_t dst_decode_int32(uint32_t x) {
-    x = dst_decode_fp32(x);
-    int32_t result = x & 0x7FFFFFFF;
-    if (x & 0x80000000) {
-        result = -result;
-    }
-    return result;
-}
-
-static inline uint32_t dst_encode_int32(int32_t x) {
-    if (x & 0x80000000) {
-        x = 0x80000000 | -x; // two's complement to sign/magnitude
-    }
-    return dst_encode_fp32(x);
-}
-
 static inline int32_t saturate_add_int32(int32_t x, int32_t y) {
     int64_t result64 = int64_t(x) + int64_t(y);
     if (result64 > 0x7FFFFFFFLL) {
@@ -1560,9 +1558,8 @@ static bool tensix_matmul_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst,
     bool flush_denormals = !p_config->ALU_ACC_CTRL_Zero_Flag_disabled_src;
     TTSIM_VERIFY(flush_denormals, UnsupportedFunctionality, "ALU_ACC_CTRL_Zero_Flag_disabled_src=1 (keep SrcB denormals) not modeled");
 
-    // XXX for GAPOOL, instr_mod1 is being ignored here per the tt-isa-documentation; otherwise GAPOOL is as MVMUL with 4 rows
-    uint32_t src_a_row = p_tensix->src_a_rwc[pipe];
-    uint32_t src_b_row = p_tensix->src_b_rwc[pipe];
+    uint32_t src_a_row = math_src_rwc(p_tensix->src_a_rwc[pipe]);
+    uint32_t src_b_row = math_src_rwc(p_tensix->src_b_rwc[pipe]);
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dst + math_dest_offset(p_tensix, p_config, pipe);
     // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     dst_row &= DST_ROWS - 1;
@@ -1712,7 +1709,8 @@ struct elw_op_sub {
 
 template<class elw_op>
 static bool tensix_elw_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst, uint32_t addr_mode, uint32_t instr_mod19,
-                          uint32_t dest_accum_en, uint32_t clear_dvalid) {
+                          uint32_t dest_accum_en, uint32_t clear_dvalid, uint32_t src_a_offset = 0,
+                          uint32_t src_b_offset = 0) {
     TTSIM_VERIFY(!(dst & 7), UnsupportedFunctionality, "dst=%d", dst);
     if (elw_op::is_mul()) {
         TTSIM_VERIFY(!dest_accum_en, NonContractualBehavior, "dest_accum_en=%d", dest_accum_en);
@@ -1748,8 +1746,8 @@ static bool tensix_elw_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst, ui
     bool flush_denormals = !p_config->ALU_ACC_CTRL_Zero_Flag_disabled_src;
     bool fp_exponent_8b = (src_a_fmt != 1) && (src_a_fmt != 10) && !is_int8;
 
-    uint32_t src_a_row = p_tensix->src_a_rwc[pipe];
-    uint32_t src_b_row = p_tensix->src_b_rwc[pipe];
+    uint32_t src_a_row = math_src_rwc(p_tensix->src_a_rwc[pipe] + src_a_offset);
+    uint32_t src_b_row = math_src_rwc(p_tensix->src_b_rwc[pipe] + src_b_offset);
     uint32_t dst_row = p_tensix->dst_rwc[pipe] + dst + math_dest_offset(p_tensix, p_config, pipe);
     // Note: DEST_REGW_BASE_Base (cfg6) is not instantiated and errors on write; always 0
     TTSIM_VERIFY(!(src_a_row & 7) && (src_a_row < SRC_ROWS), UnsupportedFunctionality, "src_a_row=%d", src_a_row);
@@ -1762,7 +1760,9 @@ static bool tensix_elw_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst, ui
     for (uint32_t row = 0; row < 8; row++) {
         for (uint32_t col = 0; col < ROW_SIZE; col++) {
             uint32_t value_a = p_tensix->src_a[src_a_bank][src_a_row + row][col];
-            uint32_t value_b = p_tensix->src_b[src_b_bank][src_b_row + ((instr_mod19 & 2) ? 0 : row)][(instr_mod19 & 1) ? 0 : col];
+            uint32_t src_b_datum_row = src_b_row + ((instr_mod19 & 2) ? 0 : row);
+            uint32_t src_b_datum_col = (instr_mod19 & 1) ? 0 : col;
+            uint32_t value_b = p_tensix->src_b[src_b_bank][src_b_datum_row][src_b_datum_col];
             if (elw_op::is_sub()) {
                 value_b ^= 0x80000000;
             }
@@ -1811,9 +1811,12 @@ static bool tensix_elw_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst, ui
             }
             uint32_t result;
             if (elw_op::is_mul()) {
-                result = elwmul(value_a, value_b, dst, zero_a, zero_b, use_dst32b, fidelity_phase, fp_exponent_8b);
+                result = elwmul(value_a, value_b, dst, zero_a, zero_b, use_dst32b, fidelity_phase, fp_exponent_8b,
+                                dest_accum_en);
             } else {
-                result = elwadd(value_a, value_b, dst, zero_a, zero_b, use_dst32b, dest_accum_en, fp_exponent_8b);
+                bool zf_b = flush_denormals;
+                result = elwadd(value_a, value_b, dst, zero_a, zero_b, use_dst32b, dest_accum_en, fp_exponent_8b,
+                                zf_b, elw_op::is_sub());
             }
             if (use_dst32b) {
                 write_dst32b<true>(p_tensix, dst_row + row, col, dst_encode_fp32(result));
@@ -3562,8 +3565,7 @@ TENSIX_EXECUTE_SFPLOAD() {
                 e += 112;
             }
             value = (s << 31) | (e << 23) | (m << 13);
-        } else
-        if (instr_mod0 == 2) {
+        } else if (instr_mod0 == 2) {
             value = dst_decode_bf16(sfpu_read_cell16(p_tensix, cell_bank, row, col));
             value <<= 16;
         } else if ((instr_mod0 == 3) || (instr_mod0 == 4)) {
@@ -3690,8 +3692,7 @@ TENSIX_EXECUTE_SFPSTORE() {
         uint32_t value = p_tensix->l_regs[lreg_ind][lane];
         if (instr_mod0 == 1) {
             sfpu_write_cell16(p_tensix, cell_bank, row, col, dst_encode_fp16(sfpu_store_to_fp16(value)));
-        } else
-        if (instr_mod0 == 2) {
+        } else if (instr_mod0 == 2) {
             value = denormals_as_zeros(value);
             sfpu_write_cell16(p_tensix, cell_bank, row, col, dst_encode_bf16(value >> 16));
         } else if (instr_mod0 == 3) {
@@ -4481,13 +4482,13 @@ TENSIX_EXECUTE_SFPXOR() {
 
 TENSIX_EXECUTE_SFP_STOCH_RND() {
     TTSIM_VERIFY(rnd_mode != 1, UnsupportedFunctionality, "stochastic rounding is explicitly out of scope");
+    TTSIM_VERIFY(!rnd_mode, UnsupportedFunctionality, "rnd_mode=%d", rnd_mode);
+    TTSIM_VERIFY(lreg_dest < 8, UnsupportedFunctionality, "lreg_dest=%d", lreg_dest);
+    TTSIM_VERIFY(!imm8_math, UnsupportedFunctionality, "imm8_math=%d", imm8_math);
     TTSIM_VERIFY((instr_mod1 <= 7) || (instr_mod1 == 12) || (instr_mod1 == 13), UndefinedBehavior, "instr_mod1=%d", instr_mod1);
     TTSIM_VERIFY((instr_mod1 == 1) || (instr_mod1 == 2) || (instr_mod1 == 3) || (instr_mod1 == 6) || (instr_mod1 == 7),
         UnimplementedFunctionality, "instr_mod1=%d", instr_mod1);
-    TTSIM_VERIFY(lreg_dest < 8, UnsupportedFunctionality, "lreg_dest=%d", lreg_dest);
     // XXX check lreg_src_b?
-    TTSIM_VERIFY(!imm8_math, UnsupportedFunctionality, "imm8_math=%d", imm8_math);
-    TTSIM_VERIFY(!rnd_mode, UnsupportedFunctionality, "rnd_mode=%d", rnd_mode);
 
     uint32_t mask = p_tensix->cc_en ? p_tensix->cc : 0xFFFFFFFF;
     for_each_lane(mask, [=](uint32_t lane) {
