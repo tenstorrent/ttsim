@@ -4661,7 +4661,7 @@ TENSIX_EXECUTE_SFPNOT() {
 
 TENSIX_EXECUTE_SFPLZ() {
     TTSIM_VERIFY(!(instr_mod1 & 1), NonContractualBehavior, "reserved bit set in instr_mod1=%d", instr_mod1);
-    TTSIM_VERIFY(instr_mod1 <= 4, UnimplementedFunctionality, "instr_mod1=%d", instr_mod1);
+    TTSIM_VERIFY(instr_mod1 <= 6, UnimplementedFunctionality, "instr_mod1=%d", instr_mod1);
     TTSIM_VERIFY(lreg_dest < 8, UnsupportedFunctionality, "lreg_dest=%d", lreg_dest);
 
     uint32_t mask = p_tensix->cc_en ? p_tensix->cc : 0xFFFFFFFF;
