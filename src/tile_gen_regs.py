@@ -15,14 +15,24 @@ def reg_case_values(module_name: str, reg: dict) -> list[str]:
         return [prefixed_name]
     return [f'{prefixed_name}({i})' for i in range(array_size)]
 
+REFUSAL_CATEGORIES = {
+    'unimplemented': 'UnimplementedFunctionality',
+    'unsupported': 'UnsupportedFunctionality',
+    'undefined': 'UndefinedBehavior',
+}
+
 def write_default_cases_macro(f: TextIO, module_name: str, suffix: str, rw_filter: str, regs: list[dict]) -> None:
+    direction = 'read' if rw_filter == 'wo' else 'write' # the access these cases refuse
     case_lines = [f'#define {module_name.upper()}_{suffix}_DEFAULT_CASES()']
     for reg in regs:
         rw = reg['rw']
-        if rw is not None and rw != rw_filter:
+        if rw is None:
+            refusal = 'unsupported' if reg.get('unsupported', False) else 'unimplemented'
+        elif rw == rw_filter:
+            refusal = reg.get(direction, 'unimplemented')
+        else:
             continue
-        unsupported = reg.get('unsupported', False)
-        category = 'UnsupportedFunctionality' if unsupported else 'UnimplementedFunctionality'
+        category = REFUSAL_CATEGORIES[refusal]
         message = reg['name'].upper()
         case_lines += [f'    case {case}:' for case in reg_case_values(module_name, reg)]
         case_lines.append(f'        TTSIM_ERROR({category}, "{message}");')

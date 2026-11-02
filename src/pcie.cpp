@@ -73,7 +73,7 @@
 
 static void verify_iatu_region_write(uint32_t offset, uint32_t value) {
     uint32_t slot = offset / 0x100;
-    TTSIM_VERIFY(slot < 32, UnimplementedFunctionality, "bar2: iATU offset=0x%x", offset);
+    TTSIM_VERIFY(slot < 32, AssertionFailure, "bar2: iATU offset=0x%x", offset);
     bool inbound = slot & 1;
     uint32_t region = slot >> 1;
     uint32_t reg = offset % 0x100;
@@ -94,13 +94,13 @@ static void verify_iatu_region_write(uint32_t offset, uint32_t value) {
 #if TT_ARCH_VERSION == 1
         switch (reg) {
             case 0x00:
-                TTSIM_VERIFY(!(value & ~INCREASE_REGION_SIZE), UnimplementedFunctionality, "bar2: iATU region_ctrl_1=0x%x", value);
+                TTSIM_VERIFY(!(value & ~INCREASE_REGION_SIZE), UnsupportedFunctionality, "bar2: iATU region_ctrl_1=0x%x", value);
                 break;
             case 0x04:
-                TTSIM_VERIFY(!(value & ~IATU_REGION_ENABLE), UnimplementedFunctionality, "bar2: iATU region_ctrl_2=0x%x", value);
+                TTSIM_VERIFY(!(value & ~IATU_REGION_ENABLE), UnsupportedFunctionality, "bar2: iATU region_ctrl_2=0x%x", value);
                 break;
             case 0x1C:
-                TTSIM_VERIFY(!value, UnimplementedFunctionality, "bar2: iATU region_ctrl_3=0x%x", value);
+                TTSIM_VERIFY(!value, UnsupportedFunctionality, "bar2: iATU region_ctrl_3=0x%x", value);
                 break;
         }
 #endif
@@ -108,34 +108,34 @@ static void verify_iatu_region_write(uint32_t offset, uint32_t value) {
     }
 #if TT_ARCH_VERSION == 0
     // verify that configuration aligns with simulator's hard-coded inbound iatu
-    TTSIM_VERIFY(region == 1, UnimplementedFunctionality, "bar2: inbound iATU region=%d", region);
+    TTSIM_VERIFY(region == 1, UnsupportedFunctionality, "bar2: inbound iATU region=%d", region);
     switch (reg) {
         case 0x00:
-            TTSIM_VERIFY(value == 0, UnimplementedFunctionality, "bar2: iATU ctrl_1=0x%x", value);
+            TTSIM_VERIFY(value == 0, UnsupportedFunctionality, "bar2: iATU ctrl_1=0x%x", value);
             return;
         case 0x04:
             TTSIM_VERIFY(!(value & IATU_REGION_ENABLE) || (value == IATU_SUPPORTED_INBOUND_CTRL_2),
-                UnimplementedFunctionality, "bar2: inbound iATU ctrl_2=0x%x", value);
+                UnsupportedFunctionality, "bar2: inbound iATU ctrl_2=0x%x", value);
             return;
         case 0x14:
-            TTSIM_VERIFY(value == uint32_t(IATU_SUPPORTED_INBOUND_TARGET), UnimplementedFunctionality,
+            TTSIM_VERIFY(value == uint32_t(IATU_SUPPORTED_INBOUND_TARGET), UnsupportedFunctionality,
                 "bar2: inbound iATU lower_target=0x%x", value);
             return;
         case 0x18:
-            TTSIM_VERIFY(value == uint32_t(IATU_SUPPORTED_INBOUND_TARGET >> 32), UnimplementedFunctionality,
+            TTSIM_VERIFY(value == uint32_t(IATU_SUPPORTED_INBOUND_TARGET >> 32), UnsupportedFunctionality,
                 "bar2: inbound iATU upper_target=0x%x", value);
             return;
         default:
-            TTSIM_ERROR(UnimplementedFunctionality, "bar2: iATU reg offset=0x%x", reg);
+            TTSIM_ERROR(UnsupportedFunctionality, "bar2: iATU reg offset=0x%x", reg);
     }
 #elif TT_ARCH_VERSION == 1
-    TTSIM_ERROR(UnimplementedFunctionality, "bar2: inbound iATU region=%u", region);
+    TTSIM_ERROR(UnsupportedFunctionality, "bar2: inbound iATU region=%u", region);
 #endif
 }
 
 static uint32_t *iatu_reg_field(uint32_t offset) {
     uint32_t slot = offset / 0x100;
-    TTSIM_VERIFY(slot < 32, UnimplementedFunctionality, "bar2: iATU offset=0x%x", offset);
+    TTSIM_VERIFY(slot < 32, AssertionFailure, "bar2: iATU offset=0x%x", offset);
     uint32_t reg = offset % 0x100;
     IatuRegion *r = (slot & 1) ? &g_p_tile.iatu_inbound[slot >> 1] : &g_p_tile.iatu_outbound[slot >> 1];
     switch (reg) {
@@ -253,7 +253,7 @@ static TlbTarget tlb_translate(uint32_t offset, uint32_t size) {
     uint64_t addr_bits = tlb_cfg & ((1ull << n_addr_bits) - 1);
     uint64_t addr = (addr_bits << window_bits) | offset;
     tlb_cfg >>= n_addr_bits; // after this shift, bit positions correspond directly to the spec's "first bit" column relative to N
-    TTSIM_VERIFY(!(tlb_cfg & ~uint64_t(0x2EFFFFFF)), UnimplementedFunctionality, "tlb_cfg=0x%llx", tlb_cfg);
+    TTSIM_VERIFY(!(tlb_cfg & ~uint64_t(0x2EFFFFFF)), UnsupportedFunctionality, "tlb_cfg=0x%llx", tlb_cfg);
     uint32_t ordering = bits<27,26>(tlb_cfg);
     TTSIM_VERIFY(ordering != 3, UndefinedBehavior, "tlb_cfg ordering=%d", ordering);
     bool mcast = bits<25,25>(tlb_cfg);
@@ -272,9 +272,9 @@ static TlbTarget tlb_translate(uint32_t offset, uint32_t size) {
     uint32_t tlb_cfg0 = g_p_tile.tlb_cfg[3*tlb_index + 0];
     uint32_t tlb_cfg1 = g_p_tile.tlb_cfg[3*tlb_index + 1];
     uint32_t tlb_cfg2 = g_p_tile.tlb_cfg[3*tlb_index + 2];
-    TTSIM_VERIFY(!(tlb_cfg2 & ~0x3AE7u), UnimplementedFunctionality, "tlb_cfg2=0x%x", tlb_cfg2);
+    TTSIM_VERIFY(!(tlb_cfg2 & ~0x3AE7u), UnsupportedFunctionality, "tlb_cfg2=0x%x", tlb_cfg2);
     uint32_t ordering = bits<7,6>(tlb_cfg2);
-    TTSIM_VERIFY(ordering != 3, UnimplementedFunctionality, "tlb_cfg ordering=%d", ordering);
+    TTSIM_VERIFY(ordering != 3, UnsupportedFunctionality, "tlb_cfg ordering=%d", ordering);
     uint64_t addr_bits = tlb_cfg0 | (uint64_t(tlb_cfg1 & 0x7FF) << 32);
     uint64_t addr = (uint64_t(addr_bits) << 21) | offset;
     bool mcast = bits<5,5>(tlb_cfg2);
@@ -305,10 +305,10 @@ static std::pair<uint32_t, uint64_t> tlb_translate_bar4(uint64_t offset, uint32_
     uint32_t tlb_cfg0 = g_p_tile.tlb_cfg[3*tlb_index + 0];
     uint32_t tlb_cfg1 = g_p_tile.tlb_cfg[3*tlb_index + 1];
     uint32_t tlb_cfg2 = g_p_tile.tlb_cfg[3*tlb_index + 2];
-    TTSIM_VERIFY(!(tlb_cfg1 & ~0x58000FFFu), UnimplementedFunctionality, "tlb_cfg1=0x%x", tlb_cfg1);
+    TTSIM_VERIFY(!(tlb_cfg1 & ~0x58000FFFu), UnsupportedFunctionality, "tlb_cfg1=0x%x", tlb_cfg1);
     uint32_t ordering = bits<28,27>(tlb_cfg1);
-    TTSIM_VERIFY(ordering != 3, UnimplementedFunctionality, "tlb_cfg ordering=%d", ordering);
-    TTSIM_VERIFY(!(tlb_cfg2 & ~0x7u), UnimplementedFunctionality, "tlb_cfg2=0x%x", tlb_cfg2);
+    TTSIM_VERIFY(ordering != 3, UnsupportedFunctionality, "tlb_cfg ordering=%d", ordering);
+    TTSIM_VERIFY(!(tlb_cfg2 & ~0x7u), UnsupportedFunctionality, "tlb_cfg2=0x%x", tlb_cfg2);
     bool static_vc = bits<30,30>(tlb_cfg1);
     uint32_t static_vc_class = bits<2,1>(tlb_cfg2);
     TTSIM_VERIFY(!static_vc || (static_vc_class <= 1), UndefinedBehavior, "static_vc_class=%d with unicast", static_vc_class);
@@ -413,7 +413,7 @@ static void dma_read_engine() { // H2D
     uint32_t size = g_p_tile.dma.read_transfer_size;
     TTSIM_VERIFY(size && !(size & 3), UndefinedBehavior, "size=%d", size);
     TTSIM_VERIFY(!(g_p_tile.dma.read_dar_low & 3), UndefinedBehavior, "misaligned device address=0x%x", g_p_tile.dma.read_dar_low);
-    TTSIM_VERIFY(!g_p_tile.dma.read_dar_high, UnimplementedFunctionality, "64-bit device address: dar_high=0x%x", g_p_tile.dma.read_dar_high);
+    TTSIM_VERIFY(!g_p_tile.dma.read_dar_high, UnsupportedFunctionality, "64-bit device address: dar_high=0x%x", g_p_tile.dma.read_dar_high);
     uint64_t host_src = uint64_t(g_p_tile.dma.read_sar_low) | (uint64_t(g_p_tile.dma.read_sar_high) << 32);
     uint32_t dev_dst = g_p_tile.dma.read_dar_low;
     uint8_t dma_buffer[DMA_BUFFER_SIZE];
@@ -437,7 +437,7 @@ static void dma_write_engine() { // D2H
     uint32_t size = g_p_tile.dma.write_transfer_size;
     TTSIM_VERIFY(size && !(size & 3), UndefinedBehavior, "size=%d", size);
     TTSIM_VERIFY(!(g_p_tile.dma.write_sar_low & 3), UndefinedBehavior, "misaligned device address=0x%x", g_p_tile.dma.write_sar_low);
-    TTSIM_VERIFY(!g_p_tile.dma.write_sar_high, UnimplementedFunctionality, "64-bit device address: sar_high=0x%x", g_p_tile.dma.write_sar_high);
+    TTSIM_VERIFY(!g_p_tile.dma.write_sar_high, UnsupportedFunctionality, "64-bit device address: sar_high=0x%x", g_p_tile.dma.write_sar_high);
     uint64_t host_dst = uint64_t(g_p_tile.dma.write_dar_low) | (uint64_t(g_p_tile.dma.write_dar_high) << 32);
     uint32_t dev_src = g_p_tile.dma.write_sar_low;
     uint8_t dma_buffer[DMA_BUFFER_SIZE];
@@ -655,7 +655,7 @@ static void pcie_bar2_wr(uint32_t offset, const void *p, uint32_t size) {
             *dma_reg_ptr(offset) = value;
             if ((offset == 0x10) || (offset == 0x30)) {
                 // The doorbell value selects the DMA channel; only channel 0 is modeled.
-                TTSIM_VERIFY(!value, UnimplementedFunctionality, "bar2: DMA doorbell channel=%u", value);
+                TTSIM_VERIFY(!value, UnsupportedFunctionality, "bar2: DMA doorbell channel=%u", value);
                 if (offset == 0x10) { // DMA_WRITE_DOORBELL: device -> host
                     dma_write_engine();
                 } else { // DMA_READ_DOORBELL: host -> device
@@ -669,7 +669,7 @@ static void pcie_bar2_wr(uint32_t offset, const void *p, uint32_t size) {
             uint32_t value = mem_rd<uint32_t>(p);
             *dma_reg_ptr(offset) = value;
             if (offset == 0x104) { // ring doorbell: host -> device
-                TTSIM_VERIFY(value == 1, UnimplementedFunctionality, "bar2: DMA doorbell=0x%x", value);
+                TTSIM_VERIFY(value == 1, UnsupportedFunctionality, "bar2: DMA doorbell=0x%x", value);
                 dma_read_engine();
             }
             break;

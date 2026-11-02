@@ -623,13 +623,15 @@ void ttsim_heartbeat();
 
 void rv32_init(Rv32HartState *p_hart, char tile_type, uint32_t tile_id, uint32_t riscv_id);
 void rv32_icache_invalidate(Rv32HartState *p_hart);
+void rv32_reset_caches(Rv32HartState *p_hart);
 void rv32_step(Rv32HartState *p_hart);
 
 void rv64_init(Rv64HartState *p_hart, char tile_type, uint32_t tile_id, uint32_t riscv_id);
+void rv64_reset_caches(Rv64HartState *p_hart);
 void rv64_step(Rv64HartState *p_hart);
 
 void tensix_init(TensixState *p_tensix, uint32_t tile_id, uint32_t tensix_id);
-bool tensix_can_push_inst(TensixState *p_tensix, uint32_t pipe);
+bool tensix_can_push_inst(const TensixState *p_tensix, uint32_t pipe, bool bypass_mop_expander);
 bool tensix_thread_idle(const TensixState *p_tensix, uint32_t pipe);
 bool tensix_mop_expander_idle(const TensixState *p_tensix, uint32_t pipe);
 void tensix_frontend_step(TensixState *p_tensix, uint32_t pipe);

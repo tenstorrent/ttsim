@@ -211,7 +211,7 @@ _Static_assert(RELAY_RESP_BLOCK_ADDR + 63u + MAX_L1_BLOCK_SIZE <= 0x18000u - 102
 #define OP_BLOCK_WRITE 5u // block write; the block precedes this header at BLOCK_BUF
 #define OP_BLOCK_READ 6u // block read; PKT_SIZE bytes wanted
 #define OP_BLOCK_RESP 7u // block read done; the block precedes this header at BLOCK_BUF
-#define OP_BROADCAST 8u // multicast the accompanying block (staged at BCAST_STAGE) to the receiver's tensix grid
+#define OP_BROADCAST 8u // multicast the accompanying block (staged at BCAST_READ) to the receiver's tensix grid
 // Relay-internal ops (RLY_OP only, never sent as a link packet): the egress streams host DRAM itself.
 #define OP_DRAM_WRITE 9u  // egress streams a host-DRAM block to its link peer's DRAM
 #define OP_DRAM_READ 10u  // egress block-reads its link peer into the host window
@@ -699,7 +699,7 @@ static __attribute__((noinline)) void service_request_queue(uint32_t *send_seq) 
 // crucially, from the active-erisc app's cooperative yield (eth_yield_entry) so routing continues
 // while metal's app holds the core. State lives in L1 so it survives across those two call sites.
 // Each role runs out of line and only when it has work, keeping the poll short: every remote command's
-// reply waits on it. Non-static: referenced by the crt0 yield shim.
+// reply waits on it.
 void eth_service(void) {
     if (!routing_enabled()) {
         return;

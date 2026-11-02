@@ -174,37 +174,43 @@
           "offset": "0x0",
           "rw": "wo",
           "reset_value": null,
-          "name": "xmov_src_addr"
+          "name": "xmov_src_addr",
+          "read": "unsupported"
         },
         {
           "offset": "0x4",
           "rw": "wo",
           "reset_value": null,
-          "name": "xmov_dst_addr"
+          "name": "xmov_dst_addr",
+          "read": "unsupported"
         },
         {
           "offset": "0x8",
           "rw": "wo",
           "reset_value": null,
-          "name": "xmov_size"
+          "name": "xmov_size",
+          "read": "unsupported"
         },
         {
           "offset": "0xC",
           "rw": "wo",
           "reset_value": null,
-          "name": "xmov_direction"
+          "name": "xmov_direction",
+          "read": "unsupported"
         },
         {
           "offset": "0x10",
           "rw": "wo",
           "reset_value": null,
-          "name": "command_addr"
+          "name": "command_addr",
+          "read": "unsupported"
         },
         {
           "offset": "0x14",
           "rw": "ro",
           "reset_value": "0x00000008",
-          "name": "status"
+          "name": "status",
+          "write": "unsupported"
         },
         {
           "offset": "0x18",
@@ -224,7 +230,8 @@
           "offset": "0x24",
           "rw": "wo",
           "reset_value": null,
-          "name": "clk_gate_en"
+          "name": "clk_gate_en",
+          "read": "unsupported"
         },
         {
           "offset": "0x28",
@@ -386,31 +393,36 @@
           "offset": "0x54",
           "rw": "wo",
           "reset_value": null,
-          "name": "dbg_bus_ctrl"
+          "name": "dbg_bus_ctrl",
+          "read": "unsupported"
         },
         {
           "offset": "0x58",
           "rw": "wo",
           "reset_value": null,
-          "name": "tensix_creg_read"
+          "name": "tensix_creg_read",
+          "read": "unsupported"
         },
         {
           "offset": "0x5C",
           "rw": "ro",
           "reset_value": null,
-          "name": "dbg_rd_data"
+          "name": "dbg_rd_data",
+          "write": "undefined"
         },
         {
           "offset": "0x60",
           "rw": "wo",
           "reset_value": null,
-          "name": "dbg_array_rd_en"
+          "name": "dbg_array_rd_en",
+          "read": "unsupported"
         },
         {
           "offset": "0x64",
           "rw": "wo",
           "reset_value": null,
-          "name": "dbg_array_rd_cmd"
+          "name": "dbg_array_rd_cmd",
+          "read": "unsupported"
         },
         {
           "offset": "0x68",
@@ -422,31 +434,36 @@
           "offset": "0x6C",
           "rw": "ro",
           "reset_value": null,
-          "name": "dbg_array_rd_data"
+          "name": "dbg_array_rd_data",
+          "write": "undefined"
         },
         {
           "offset": "0x70",
           "rw": "wo",
           "reset_value": null,
-          "name": "cg_ctrl_hyst0"
+          "name": "cg_ctrl_hyst0",
+          "read": "unsupported"
         },
         {
           "offset": "0x74",
           "rw": "wo",
           "reset_value": null,
-          "name": "cg_ctrl_hyst1"
+          "name": "cg_ctrl_hyst1",
+          "read": "unsupported"
         },
         {
           "offset": "0x78",
           "rw": "ro",
           "reset_value": null,
-          "name": "tensix_creg_rddata"
+          "name": "tensix_creg_rddata",
+          "write": "undefined"
         },
         {
           "offset": "0x7C",
           "rw": "wo",
           "reset_value": null,
-          "name": "cg_ctrl_hyst2"
+          "name": "cg_ctrl_hyst2",
+          "read": "unsupported"
         },
         {
           "offset": "0x80",
@@ -508,7 +525,8 @@
           "offset": "0xA8",
           "rw": "ro",
           "reset_value": null,
-          "name": "dbg_instrn_buf_status"
+          "name": "dbg_instrn_buf_status",
+          "write": "undefined"
         },
         {
           "offset": "0xAC",
@@ -681,19 +699,22 @@
           "offset": "0x1F0",
           "rw": "ro",
           "reset_value": null,
-          "name": "wall_clock_0"
+          "name": "wall_clock_0",
+          "write": "unsupported"
         },
         {
           "offset": "0x1F4",
           "rw": "ro",
           "reset_value": null,
-          "name": "wall_clock_1"
+          "name": "wall_clock_1",
+          "write": "unsupported"
         },
         {
           "offset": "0x1F8",
           "rw": "ro",
           "reset_value": null,
-          "name": "wall_clock_1_at"
+          "name": "wall_clock_1_at",
+          "write": "unsupported"
         },
         {
           "offset": "0x1FC",

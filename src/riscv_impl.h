@@ -69,6 +69,16 @@ static void dcache_invalidate(RiscvHartState *p_hart) {
 }
 #endif
 
+#if !TTSIM_RV64_SYSTEM
+// what the core's reset does to the caches: clears their valid bits
+void RV_XLEN_PREFIX(reset_caches)(RiscvHartState *p_hart) {
+    RV_XLEN_PREFIX(icache_invalidate)(p_hart);
+#if TT_ARCH_VERSION >= 1
+    dcache_invalidate(p_hart);
+#endif
+}
+#endif
+
 void RV_XLEN_PREFIX(init)(RiscvHartState *p_hart, char tile_type, uint32_t tile_id, uint32_t riscv_id) {
     memset(p_hart, 0, sizeof(RiscvHartState));
 #if !TTSIM_RV64_SYSTEM
@@ -111,10 +121,7 @@ void RV_XLEN_PREFIX(init)(RiscvHartState *p_hart, char tile_type, uint32_t tile_
 #endif
     }
 
-    RV_XLEN_PREFIX(icache_invalidate)(p_hart);
-#if TT_ARCH_VERSION >= 1
-    dcache_invalidate(p_hart);
-#endif
+    RV_XLEN_PREFIX(reset_caches)(p_hart);
 #endif
 }
 
@@ -366,7 +373,7 @@ template<uint32_t funct3> static void RV_XLEN_PREFIX(alu_imm)(RiscvHartState *p_
             }
             break;
         case 2: value = int_xlen_t(src) < imm; break; // SLTI
-        case 3: value = src < uint_xlen_t(imm); break; // SLTUI
+        case 3: value = src < uint_xlen_t(imm); break; // SLTIU
         case 4: value = src ^ imm; break; // XORI
         case 5:
             switch (imm) {
@@ -1044,7 +1051,7 @@ template<class branch_op> static void RV_XLEN_PREFIX(branch)(RiscvHartState *p_h
     // XXX can optimize this imm decode; could also move inside "if taken"?
     uint_xlen_t imm = 0;
     imm |= ((inst >> 8) & 15) << 1; // imm[4:1] at inst[11:8]
-    imm |= ((inst >> 25) & 0x3F) << 5; /// imm[10:5] at inst[30:25]
+    imm |= ((inst >> 25) & 0x3F) << 5; // imm[10:5] at inst[30:25]
     imm |= ((inst >> 7) & 1) << 11; // imm[11] at inst[7]
     imm |= ((inst >> 31) & 1) << 12; // imm[12] at inst[31]
     imm = int_xlen_t(int32_t(imm << 19)) >> 19; // sign extend imm[12] to imm[31:12] or imm[63:12]
@@ -1068,6 +1075,9 @@ template<class branch_op> static void RV_XLEN_PREFIX(branch)(RiscvHartState *p_h
 static void RV_XLEN_PREFIX(pause)(RiscvHartState *p_hart) {
     if (p_hart->tile_type == 'T') {
         TensixTile *p_tile = &g_t_tiles[p_hart->tile_id];
+        if (!((p_tile->rv32_cores_active >> p_hart->riscv_id) & 1)) {
+            return; // put into reset earlier in this clock, so it stays there
+        }
         p_tile->rv32_cores_active &= ~(1 << p_hart->riscv_id);
         p_tile->rv32_cores_paused |= 1 << p_hart->riscv_id;
         g_chip->t_tile_cores_paused = true;
@@ -1163,7 +1173,7 @@ static void RV_XLEN_PREFIX(ecall_ebreak)(RiscvHartState *p_hart, uint32_t inst) 
     }
 #else
     if (inst == 0x73) {
-        TTSIM_ERROR(UnimplementedFunctionality, "ecall");
+        TTSIM_ERROR(UnsupportedFunctionality, "ecall"); // pauses the core for a debugger, as EBREAK does
 #if XLEN == 64
     } else if (inst == 0x30200073) { // MRET
         p_hart->pc = p_hart->mepc;
@@ -1258,7 +1268,7 @@ static void rv64_csr_op(RiscvHartState *p_hart, uint32_t inst, uint64_t src, boo
     uint32_t r_dst = bits<11,7>(inst);
     uint32_t csr = bits<31,20>(inst);
 
-    // Privilege + read-only enforcement (priv-spec 2.1, "CSR Field Specifications").
+    // Privilege + read-only enforcement (priv-spec 2.1, "CSR Address Mapping Conventions").
     // csr[9:8] encodes the lowest privilege that may access the CSR; csr[11:10]==3 marks it read-only.
     // A read-only write attempt (do_write true) and any access from too low a privilege both raise an
     // illegal-instruction trap before any read/write side effect.
@@ -1476,7 +1486,7 @@ static void RV_XLEN_PREFIX(tti)(RiscvHartState *p_hart, uint32_t inst) {
     tensix_id = 0;
 
     TensixState *p_tensix = &g_t_tiles[p_hart->tile_id].tensix[tensix_id];
-    if (tensix_can_push_inst(p_tensix, pipe)) {
+    if (tensix_can_push_inst(p_tensix, pipe, bypass_mop_expander)) {
         uint32_t tensix_inst = (inst << 30) | (inst >> 2);
         tensix_push_inst(p_tensix, pipe, tensix_inst, bypass_mop_expander);
     } else {
