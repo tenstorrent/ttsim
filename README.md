@@ -210,7 +210,7 @@ the chip model and presents it to the guest as a PCIe endpoint - an ECAM config 
 BAR windows - just as [ttsim-qemu](#running-ttsim-as-a-qemu-pci-device) does for QEMU. The guest device
 tree must declare a `pci-host-ecam-generic` bus at the ECAM base at `0x30000000`. Then
 [tt-kmd](https://github.com/tenstorrent/tt-kmd) binds to it and exposes `/dev/tenstorrent/0`, providing
-you with a entire simulated RISC-V computer with an AI hardware accelerator, running Linux - all in just
+you with an entire simulated RISC-V computer with an AI hardware accelerator, running Linux - all in just
 a few hundred KB of total simulator code, and with no external dependencies beyond libc.
 
 ```bash
@@ -243,12 +243,9 @@ SFPLOADMACRO is not supported in the SFPU. Set `TT_METAL_DISABLE_SFPLOADMACRO=1`
 Multichip support and testing is incomplete. UMD changes for full support are not yet fully merged
 for platforms beyond `wh_x2`, though enablement for additional targets is in progress, and the
 `micah/native-sim` branch of `tt-metal` was verified against the `wh_x2`, `wh_x8`, `wh_x32`,
-`bh_x2`, and `bh_x32` simulator builds. Set the `TT_METAL_MOCK_CLUSTER_DESC_PATH` environment
-variable to point to a valid cluster .yaml (e.g.
-`tt_metal/third_party/umd/tests/cluster_descriptor_examples/wormhole_N300.yaml` or
-`tt_metal/third_party/umd/tests/cluster_descriptor_examples/blackhole_P300_both_mmio.yaml`)
-when running tt-metal tests. An example of a test that has been validated to run on N300, P300, T3000,
-WH Galaxy, and BH Galaxy and not only pass but also dispatch work to all chips in both SD and FD mode is
+`bh_x2`, and `bh_x32` simulator builds. An example of a test that has been validated to run on N300,
+P300, T3000, WH Galaxy, and BH Galaxy and not only pass but also dispatch work to all chips in both SD
+and FD mode is
 `tests/ttnn/unit_tests/base_functionality/test_multi_device.py::test_multi_device_single_op_binary`.
 The `bh_x32` binary is x86_64 only at present due to aarch64 linker limitations with the extremely large
 BSS segment this requires.
