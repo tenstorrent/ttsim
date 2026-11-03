@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <algorithm>
 #include <bit>
 #include <iterator>
 
