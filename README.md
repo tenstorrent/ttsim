@@ -140,21 +140,34 @@ cd ttsim-qemu
 ./configure --target-list=x86_64-softmmu && make -j$(nproc)
 ```
 
-Run, with the appropriate `bar4-size` for the chip (Wormhole: `32M`, Blackhole: `32G`):
+Run, with the BAR sizes for the chip:
+
+| Chip | `bar0-size` | `bar4-size` |
+| --- | --- | --- |
+| Wormhole | `512M` (default) | `32M` |
+| Blackhole | `512M` (default) | `32G` |
+| Quasar | `4G` | `512G` |
+
 ```bash
 qemu-system-x86_64 ... \
-    -device ttsim,lib=/path/to/libttsim.so,bar4-size=32M
+    -device ttsim,lib=/path/to/libttsim.so,bar0-size=512M,bar4-size=32M
+```
+
+On Quasar, libttsim implements the host MMIO path through its PCIe device:
+```bash
+qemu-system-x86_64 ... \
+    -device ttsim,lib=/path/to/libttsim.so,bar0-size=4G,bar4-size=512G
 ```
 
 A multi-chip `libttsim.so` (e.g. `wh_x32`/`bh_x32`, or the 4-MMIO `wh_x8`) presents several
 host-visible chips through the one process-wide library. Add one `-device ttsim` per MMIO chip,
-all pointing at the same library; each surfaces as its own PCI device and, in the guest, its own
-`/dev/tenstorrent/N`. Devices auto-assign the lowest free chip number (or pass `index=N` to pin
-one):
+all pointing at the same library and using the BAR sizes for the chip (Wormhole shown); each
+surfaces as its own PCI device and, in the guest, its own `/dev/tenstorrent/N`. Devices auto-assign
+the lowest free chip number (or pass `index=N` to pin one):
 ```bash
 qemu-system-x86_64 ... \
-    -device ttsim,lib=/path/to/libttsim.so,bar4-size=32M \
-    -device ttsim,lib=/path/to/libttsim.so,bar4-size=32M   # repeat NUM_MMIO_CHIPS times
+    -device ttsim,lib=/path/to/libttsim.so,bar0-size=512M,bar4-size=32M \
+    -device ttsim,lib=/path/to/libttsim.so,bar0-size=512M,bar4-size=32M   # repeat NUM_MMIO_CHIPS times
 ```
 
 Inside the guest, build and load `tt-kmd` to surface `/dev/tenstorrent/0`:
@@ -165,8 +178,6 @@ sudo insmod tenstorrent.ko
 ```
 
 `qemu-system-aarch64` is also supported and will be faster on ARM-based host platforms.
-
-On Quasar, libttsim implements the host MMIO path through its PCIe device's BARs. Its BAR4 is 512GB.
 
 ## Full-System Simulation with ttsim-riscv64
 Where the `libttsim.so` path models a Tenstorrent *chip*, **ttsim-riscv64** is the other face of

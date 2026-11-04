@@ -5,18 +5,20 @@ This document defines coding style and technical conventions specific to this co
 ## General Principles
 
 - **Consistency over preference.** Follow the style of the surrounding code.
-- **No style debates.** Time is better spent on correctness and performance.
-- **Copy existing patterns.** If unsure, imitate the nearest example.
+- **Copy existing patterns, not code.** If unsure, imitate the nearest example; extend an existing model rather than
+  adding a parallel copy that needs every fix twice.
+- **No dead code.** Nothing lands that nothing calls or tests; code arrives with its caller and its test.
+- **Names mean their obvious reading.** A field, flag or register does what its name says; don't repurpose one.
 - **Write for outside readers.** This codebase is read by safety auditors and by academic users
   adopting `ttsim` as a reference implementation. Code only its author can follow is a liability.
 
 ## Language & Standards
 
-- Primary language: a constrained subset of **gnu++20** (with limited C/assembly where appropriate).
+- Primary language: a constrained subset of **C++20** (with limited C/assembly where appropriate).
 - Scripts/tools: **Python 3.x**, plus **JSON** for data interchange/serialization.
 - Bash may be used for trivial scripts (a few lines). For anything with control flow or >10 lines, use Python.
 - Code must build and run on: Linux/x86_64, Linux/aarch64, Linux/riscv64, and macOS/aarch64.
-- Must build cleanly with `-Wall -Werror`.
+- Must build cleanly with `-Wall -Werror` on every supported compiler, the oldest being GCC 11 (Ubuntu 22.04).
 
 ## Style Rules
 
@@ -59,7 +61,13 @@ are explicitly forbidden by safety-cert customer requirements.
 - **Use `TTSIM_ERROR` and `TTSIM_VERIFY`:** These require every error to be tagged with one of a standardized set of
   error categories.
 - **Gating unproven code:** Code paths lacking adequate tests must remain disabled as `UntestedFunctionality` until proven reliable.
-- Always error on unsupported features, unexpected states, or conditions that are not expected in production.
+- Always error on unsupported features, unexpected states, or conditions that are not expected in production;
+  refuse rather than guess.
+- **Pick the category that says who must act:** software broke the spec (`UndefinedBehavior` only where the spec gives
+  no guarantees at all, e.g. hangs or nonlocal corruption; a deterministic case is `NonContractualBehavior` with an
+  exact rule), a feature left out on purpose (`UnsupportedFunctionality`) or not done yet
+  (`UnimplementedFunctionality`), or a simulator bug (`AssertionFailure`).
+- A check depends on opcode, configuration and address, never on the data computed on or on cycle timing.
 - When in doubt, make error checks too strict rather than too loose.
 
 ## Undefined Behavior
@@ -97,13 +105,27 @@ and confusing at best).
 ## Floating Point
 
 Bit-identical results across x86, AArch64, and RISC-V hosts are required (also a safety-cert customer
-expectation; numerical reproducibility is part of their safety case). In service of this requirement:
+expectation; numerical reproducibility is part of their safety case). Host IEEE `float` and `double` are allowed
+for modeling the hardware's float ops, under these rules:
 
-- Avoid `float` and `double` entirely, as they open up too much flexibility for compiler misbehavior.
+- Use only operations IEEE 754 defines exactly: `+`, `-`, `*`, compares, and conversions between `float`,
+  `double` and integers. Move bits in and out with `std::bit_cast`.
+- Wherever the hardware isn't plain IEEE, fix it up explicitly in integer code: denormal inputs and outputs
+  flushed, NaNs made canonical, narrowing to the device's own formats (e.g. bf16) with its rounding, and anything
+  else the hardware does differently. Never rely on what the host does with a NaN's payload or sign.
+- If a result is rounded twice (e.g. computed in `double`, then narrowed to `float`), say in a comment why that
+  equals one rounding (the wider format has at least 2p+2 bits of precision for p-bit operands).
+- No implicit fused multiply-add: the build passes `-ffp-contract=off`, so the compiler never fuses a multiply and
+  an add on its own. An explicit `__builtin_fma`/`__builtin_fmaf` is fine where the modeled operation really is a
+  single-rounding fused multiply-add and you know exactly why (e.g. RISC-V FMADD in `rv64_fpu.cpp`). ttsim doesn't
+  support hosts without hardware FMA (e.g. Ivy Bridge). No `-ffast-math` or anything like it.
 - Do not use `<math.h>` or `<cmath>` functions: their results often differ by platform.
-- Intrinsics that perform floating-point arithmetic are prohibited unless explicitly reviewed for determinism and NaN handling.
-
-If any FP use is later approved, results must be bitwise identical across all supported platforms.
+- Code runs under the default FP environment (round to nearest even, no FTZ/DAZ, exceptions masked). libttsim.so
+  sets it at every exported entry point and restores the host's on return and around host callbacks; nothing else
+  changes it.
+- Intrinsics that perform floating-point arithmetic follow the same rules and are prohibited unless explicitly
+  reviewed for determinism and NaN handling.
+- Check host-float code against the RTL exhaustively where the input space allows.
 
 ## Serialization/Checkpointing
 
@@ -121,17 +143,12 @@ Design data structures with serialization in mind:
 - Prefer intrinsics over inline assembly.
 - Validate all performance assumptions with benchmarks.
 
-## Debugging
-
-- No ad-hoc debug prints (`printf`, etc.).
-- Use only structured debugging systems defined in the project.
-- Temporary debug aids must be removed before commit.
-
 ## File Organization
 
 - `.github/` - CI workflows
 - `data/` - hardware specifications (do not edit manually)
 - `docs/` - design docs
+- `fw/` - firmware sources (built images are checked in under `data/`)
 - `scripts/` - build/utility scripts
 - `src/` - source code
 
