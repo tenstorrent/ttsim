@@ -122,7 +122,7 @@ real, from the prompt down to the instructions issued on a Tensix tile.
 
 A host-side bit-exact device proxy acts as the reference: `--check` requires every logit produced
 under `--sim` to match it bit-for-bit, the same standard `ttsim` holds itself to
-[against silicon](#numerical-accuracy). Editing a kernel and re-checking a full 24-layer model
+[against silicon](#numerical-accuracy-timing-and-ordering). Editing a kernel and re-checking a full 24-layer model
 against an exact reference needs no silicon at all.
 
 See tt-lab's README for model downloads, the requantization step, and its simulator compatibility
@@ -311,7 +311,7 @@ The same discipline also serves academic and educational use of `ttsim` as a ref
 AI-accelerator microarchitecture, where legibility to an outside reader overlaps heavily with what
 safety auditors need.
 
-### Numerical Accuracy
+### Numerical Accuracy, Timing, and Ordering
 `ttsim` is designed to provide **bit-exact** numerical results relative to silicon for all
 computations, floating point and otherwise. The goal is to match all hardware computations
 bit-for-bit across all instructions, opcodes, functional units, and special cases, including
@@ -327,11 +327,12 @@ Most code will achieve bit-exact results, but cases that can produce divergent r
 - Execution of UndefinedBehavior or UnpredictableValue cases.
 - Any other violations of ISA specification requirements.
 
-For timing-dependent computations, `ttsim` may evaluate operations in any order permitted by
-software synchronization. This may include operation orders that are extremely unlikely on silicon.
-To ensure an exact match with silicon, avoid algorithms where the runtime order of operations
-affects the result. For example, floating-point reductions using addition will diverge unless each
-addition is explicitly serialized in a deterministic order.
+`ttsim` is not cycle-accurate. Where timing is not fixed by the ISA and software synchronization,
+it may complete operations, make writes visible, and order events in any way they permit, including
+ways that are extremely unlikely on silicon; software that is correct only under silicon's usual
+timing is outside this contract. To ensure an exact match with silicon, avoid algorithms where the
+runtime order of operations affects the result. For example, floating-point reductions using
+addition will diverge unless each addition is explicitly serialized in a deterministic order.
 
 ### Strictness vs. Silicon
 The simulator may report `UndefinedBehavior` or `UnpredictableValue` for conditions that do not
