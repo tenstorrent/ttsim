@@ -194,15 +194,25 @@ Build:
 The released ttsim-riscv64 binaries are built on Ubuntu 24.04 and need glibc 2.38 or newer (Ubuntu 24.04 or
 later). On Ubuntu 22.04, build it from source as above.
 
-Boot Linux (OpenSBI `fw_jump` firmware + a kernel `Image` + initramfs + a flattened device tree), e.g.
-an 8-hart SMP boot with a virtio-blk disk and an interactive console:
+Boot Linux (OpenSBI `fw_dynamic` firmware + a kernel `Image` + a flattened device tree), e.g. an 8-hart SMP
+boot with a virtio-blk disk and an interactive console:
 ```bash
 src/_out/release_riscv64/ttsim --harts 8 -i \
     --entry 0x80000000 --set-reg a0 0 --set-reg a1 0x88800000 \
-    --load-bin fw_jump.bin 0x80000000 --load-bin Image      0x80200000 \
-    --load-bin initrd.img  0x84000000 --load-bin board.dtb  0x88800000 \
+    --fw-dynamic-next 0x80200000 \
+    --load-bin fw_dynamic.bin 0x80000000 --load-bin Image 0x80200000 \
+    --load-bin board.dtb 0x88800000 \
     --disk disk.img
 ```
+
+A kernel with its disk driver and filesystem built in (like the one [docs/riscv64_image.md](docs/riscv64_image.md)
+builds) mounts `root=/dev/vda` itself, so no initrd is needed. To boot your own initrd, add
+`--load-bin initrd.img 0x84000000` and give the DTB's `/chosen` node `linux,initrd-start` and `linux,initrd-end`
+properties for where it lies in memory.
+
+`--fw-dynamic-next <addr>` gives OpenSBI's `fw_dynamic` the kernel's address and leaves the device tree where
+`a1` points. `fw_jump.bin` boots too, without the option, but it copies the device tree to 0x82200000, which
+overwrites part of a kernel image larger than 32 MiB (Ubuntu's riscv64 kernel is 43.7 MB).
 
 `-i` attaches the simulated UART console to your terminal. Ctrl-C is hooked and passed into the
 simulator, so use Ctrl-\ if you need to forcibly exit.
@@ -212,6 +222,10 @@ write them to the image file itself.
 
 `--stop-on-uart-text <text>` ends the run when the console output contains `<text>` (e.g. the shell prompt) and
 prints the instruction count and wall time at that point, to measure boot time.
+
+[docs/riscv64_image.md](docs/riscv64_image.md) shows how to build a bootable Ubuntu image (firmware, kernel and
+disk image, no initrd) from scratch: no root or QEMU needed, and byte-for-byte reproducible. It needs ttsim
+v1.16.0 or later.
 
 Note that your .dtb must declare more harts in order for Linux to use them.
 
@@ -231,13 +245,15 @@ a few hundred KB of total simulator code, and with no external dependencies beyo
 # Boot Linux with the Wormhole chip attached over (simulated) PCIe -- the DTB declares the ECAM bus:
 src/_out/release_riscv64/ttsim -i \
     --entry 0x80000000 --set-reg a0 0 --set-reg a1 0x88800000 \
-    --load-bin fw_jump.bin 0x80000000 --load-bin Image      0x80200000 \
-    --load-bin initrd.img  0x84000000 --load-bin board.dtb  0x88800000 \
+    --fw-dynamic-next 0x80200000 \
+    --load-bin fw_dynamic.bin 0x80000000 --load-bin Image      0x80200000 \
+    --load-bin board.dtb  0x88800000 \
     --tt-device src/_out/release_wh/libttsim.so --disk disk.img
 ```
 
-Make sure your disk.img is already pre-populated with `build-essential linux-headers-generic` and
-the tt-kmd source. Inside the guest, build and load `tt-kmd` exactly as for the QEMU path above:
+Make sure your disk.img is already pre-populated with `build-essential linux-headers-generic` (the image
+[docs/riscv64_image.md](docs/riscv64_image.md) builds has both) and the tt-kmd source. Inside the guest, build
+and load `tt-kmd` exactly as for the QEMU path above:
 ```bash
 cd tt-kmd && make
 sudo insmod tenstorrent.ko # surfaces /dev/tenstorrent/0

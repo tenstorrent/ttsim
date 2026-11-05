@@ -1,0 +1,74 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# Stage 2 of the ttsim-riscv64 image build. Runs as PID 1 on ttsim-riscv64 itself (kernel argument
+# init=/stage2/run), so every maintainer script runs on a native riscv64 system and no emulator is involved.
+#
+# Stage 1 (on the host) extracted every package's files, so dpkg and the tools its maintainer scripts call
+# already run. This script unpacks the packages in /stage2/debs properly (dpkg's database, preinst), configures
+# them, runs /stage2/customize if present, writes the root filesystem to /stage2/rootfs.tar (sorted, numeric
+# owners, xattrs, mtimes clamped to SOURCE_DATE_EPOCH) and powers off, which ends the simulation. The host reads
+# the tarball from the disk image. The console shows "stage2: DONE" or "stage2: FAILED: <step>".
+
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C.UTF-8 TZ=UTC
+export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
+export PYTHONHASHSEED=0 PERL_HASH_SEED=0 PERL_PERTURB_KEYS=0
+export SOURCE_DATE_EPOCH="$(cat /stage2/epoch)"
+
+end() {
+    echo "stage2: $1"
+    sync
+    mount -o remount,ro /
+    echo o > /proc/sysrq-trigger
+    while :; do sleep 1000; done
+}
+
+run() {
+    echo "stage2: $(echo "$*" | cut -c1-160)"
+    "$@" || end "FAILED: $(echo "$*" | cut -c1-160)"
+}
+
+# First, before anything writes the root filesystem (mount itself creates /run/mount): every file the guest
+# writes then carries this time or later, and the tarball clamps those to it.
+date -u -s "@$SOURCE_DATE_EPOCH"
+[ -c /dev/null ] || mount -t devtmpfs devtmpfs /dev
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t tmpfs -o mode=0755 tmpfs /run
+mount -t tmpfs -o mode=1777 tmpfs /tmp
+
+printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d   # no service starts while configuring
+chmod 0755 /usr/sbin/policy-rc.d
+DPKG="dpkg --force-unsafe-io --force-confold --force-confdef"
+if [ -d /stage2/debs ]; then
+    cd /stage2/debs
+    # base-passwd first: other preinsts look up users and groups
+    run $DPKG --force-depends --unpack $(cat /stage2/order)
+    cd /
+fi
+run $DPKG --force-depends --force-configure-any --configure --pending
+run $DPKG --configure -a
+[ -z "$(dpkg --audit)" ] || end "FAILED: dpkg --audit: $(dpkg --audit | head -5)"
+rm -f /usr/sbin/policy-rc.d
+
+if [ -x /stage2/customize ]; then
+    run /stage2/customize
+fi
+
+# Logs and caches whose contents record when or how the build ran, not what it installed
+rm -rf /var/log/dpkg.log /var/log/alternatives.log /var/log/apt /var/log/bootstrap.log \
+    /var/cache/ldconfig/aux-cache /var/lib/dpkg/status-old /var/lib/dpkg/diversions-old \
+    /var/lib/dpkg/statoverride-old /var/cache/debconf/config.dat-old /var/cache/debconf/templates.dat-old \
+    /var/cache/debconf/passwords.dat-old /etc/passwd- /etc/group- /etc/shadow- /etc/gshadow- /etc/subuid- \
+    /etc/subgid-
+
+# A bind mount of / shows the root filesystem without /proc, /sys, /dev, /run and /tmp mounted over it.
+mkdir -p /stage2/root
+run mount --bind / /stage2/root
+run tar --create --file=/stage2/rootfs.tar --directory=/stage2/root --exclude=./stage2 --exclude=./lost+found \
+    --sort=name --numeric-owner --xattrs --xattrs-include='*' --format=posix \
+    --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime \
+    --mtime="@$SOURCE_DATE_EPOCH" --clamp-mtime .
+umount /stage2/root
+end DONE

@@ -1,0 +1,118 @@
+// SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+/dts-v1/;
+
+/ {
+    #address-cells = <2>;
+    #size-cells = <2>;
+    compatible = "tenstorrent,ttsim-riscv64";
+    model = "Tenstorrent ttsim-riscv64";
+
+    aliases {
+        serial0 = &uart0;
+        virtio0 = &virtio_blk;
+    };
+
+    chosen {
+        stdout-path = "serial0:115200n8";
+        bootargs = "earlycon=sbi console=ttyS0 root=/dev/vda rw";
+    };
+
+    cpus {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        timebase-frequency = <10000000>;
+
+        cpu@0 {
+            device_type = "cpu";
+            reg = <0>;
+            status = "okay";
+            compatible = "riscv";
+            riscv,isa = "rv64imafdc";
+            mmu-type = "riscv,sv39";
+
+            cpu0_intc: interrupt-controller {
+                #interrupt-cells = <1>;
+                interrupt-controller;
+                compatible = "riscv,cpu-intc";
+            };
+        };
+    };
+
+    memory@80000000 {
+        device_type = "memory";
+        reg = <0x0 0x80000000 0x0 0x40000000>;
+    };
+
+    soc {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        compatible = "simple-bus";
+        ranges;
+
+        clint@2000000 {
+            compatible = "sifive,clint0", "riscv,clint0";
+            reg = <0x0 0x02000000 0x0 0x00010000>;
+            interrupts-extended = <&cpu0_intc 3>, <&cpu0_intc 7>;
+        };
+
+        plic: interrupt-controller@c000000 {
+            #interrupt-cells = <1>;
+            interrupt-controller;
+            compatible = "sifive,plic-1.0.0", "riscv,plic0";
+            reg = <0x0 0x0c000000 0x0 0x00600000>;
+            riscv,ndev = <53>;
+            interrupts-extended = <&cpu0_intc 11>, <&cpu0_intc 9>;
+        };
+
+        syscon: test@100000 {
+            compatible = "sifive,test1", "sifive,test0", "syscon";
+            reg = <0x0 0x00100000 0x0 0x00001000>;
+        };
+
+        poweroff {
+            compatible = "syscon-poweroff";
+            regmap = <&syscon>;
+            offset = <0x0>;
+            value = <0x5555>;
+        };
+
+        uart0: serial@10000000 {
+            compatible = "ns16550a";
+            reg = <0x0 0x10000000 0x0 0x00000100>;
+            clock-frequency = <3686400>;
+            current-speed = <115200>;
+            interrupt-parent = <&plic>;
+            interrupts = <10>;
+            reg-shift = <0>;
+            reg-io-width = <1>;
+        };
+
+        virtio_blk: virtio@10001000 {
+            compatible = "virtio,mmio";
+            reg = <0x0 0x10001000 0x0 0x00001000>;
+            interrupt-parent = <&plic>;
+            interrupts = <1>;
+        };
+
+        /*
+        pcie@30000000 {
+            compatible = "pci-host-ecam-generic";
+            device_type = "pci";
+            #address-cells = <3>;
+            #size-cells = <2>;
+            #interrupt-cells = <1>;
+            bus-range = <0x0 0x0>;
+            reg = <0x0 0x30000000 0x0 0x00100000>;
+            ranges = <0x02000000 0x0 0xc0000000 0x0 0xc0000000 0x0 0x40000000>,
+                     <0x02000000 0x1 0x00000000 0x1 0x00000000 0xf 0x00000000>;
+            interrupt-map-mask = <0x0 0x0 0x0 0x7>;
+            interrupt-map = <0x0 0x0 0x0 0x1 &plic 11>,
+                            <0x0 0x0 0x0 0x2 &plic 12>,
+                            <0x0 0x0 0x0 0x3 &plic 13>,
+                            <0x0 0x0 0x0 0x4 &plic 14>;
+        };
+        */
+    };
+};

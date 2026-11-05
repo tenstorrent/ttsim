@@ -1,0 +1,59 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# Guest customizations of the ttsim-riscv64 image (docs/riscv64_image.md), run by /stage2/run on the guest after
+# the packages are configured.
+set -e
+
+echo ubuntu > /etc/hostname
+cat > /etc/hosts <<'EOF'
+127.0.0.1 localhost
+127.0.1.1 ubuntu
+::1 localhost ip6-localhost ip6-loopback
+EOF
+echo 11111111111111111111111111111111 > /etc/machine-id
+if [ -e /var/lib/dbus/machine-id ]; then
+    cp /etc/machine-id /var/lib/dbus/machine-id   # dbus's postinst made a random one
+fi
+# No apt sources: the simulated machine has no network device.
+cat > /etc/apt/sources.list <<'EOF'
+# This image has no network device, so apt has no sources. Install a package from a .deb copied onto the disk
+# (sudo apt install ./x.deb), or add it to packages.txt and build a new image. The packages came from
+# http://ports.ubuntu.com/ubuntu-ports, suites noble, noble-updates and noble-security.
+EOF
+cat > /etc/fstab <<'EOF'
+/dev/vda / ext4 defaults,noatime 0 1
+proc /proc proc defaults 0 0
+sysfs /sys sysfs defaults 0 0
+devtmpfs /dev devtmpfs mode=0755,nosuid 0 0
+tmpfs /tmp tmpfs mode=1777,nosuid,nodev 0 0
+EOF
+
+# A passwordless 'ubuntu' user with passwordless sudo, logged in automatically on the serial console
+useradd -m -s /bin/bash ubuntu
+usermod -aG sudo ubuntu
+passwd -d ubuntu
+echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu-nopasswd
+chmod 0440 /etc/sudoers.d/ubuntu-nopasswd
+mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d
+cat > /etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf <<'EOF'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin ubuntu --noclear %I 115200 linux
+EOF
+systemctl enable serial-getty@ttyS0.service
+
+# Units a simulated boot doesn't need, for a faster, quieter boot
+systemctl set-default multi-user.target
+systemctl mask \
+    apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer \
+    e2scrub_all.timer fstrim.timer man-db.timer logrotate.timer \
+    systemd-networkd-wait-online.service systemd-timesyncd.service \
+    systemd-rfkill.socket proc-sys-fs-binfmt_misc.automount sys-kernel-debug.mount sys-kernel-tracing.mount \
+    modprobe@autofs4.service modprobe@configfs.service modprobe@dm_mod.service modprobe@drm.service \
+    modprobe@efi_pstore.service modprobe@fuse.service modprobe@loop.service
+systemctl disable \
+    systemd-resolved.service rsyslog.service cron.service e2scrub_reap.service keyboard-setup.service \
+    console-setup.service setvtrgb.service dpkg-db-backup.timer motd-news.timer systemd-tmpfiles-clean.timer \
+    dmesg.service ldconfig.service systemd-journal-catalog-update.service systemd-update-done.service
