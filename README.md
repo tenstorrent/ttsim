@@ -21,8 +21,8 @@ Quasar is pre-silicon and ships as a binary only.
   tt-forge, and LLK examples/tests, as well as entire LLMs and other AI models.
 
 - **Wormhole/Blackhole multichip**: `wh_x2` (N300), `wh_x8` (T3000/LoudBox), `wh_x32` (WH Galaxy),
-  `bh_x2` (P300), `bh_x4` (two P300 cards), and `bh_x32` (BH Galaxy) configs are available, with
-  significant numbers of Ethernet, multidevice, and fabric tests passing.
+  `bh_x2` (P300), `bh_x4` (QuietBox 2: two P300 cards), and `bh_x32` (BH Galaxy) configs are available,
+  each its own binary. Testing status is under [Known Issues](#known-issues).
 
 - **Quasar**: Approaching feature complete and now alpha quality for slow dispatch mode. Some features
   remain, but the bulk of core Tensix and DM functionality is present and well tested. Can run many
@@ -48,7 +48,8 @@ wget https://github.com/tenstorrent/ttsim/releases/download/vX.Y/libttsim_bh.so
 wget https://github.com/tenstorrent/ttsim/releases/download/vX.Y/libttsim_qsr.so
 ```
 
-Linux/aarch64 binary releases are suffixed with `_aarch64`, e.g., `libttsim_wh_aarch64.so`.
+Multichip binaries are named by config, e.g., `libttsim_wh_x2.so`. Linux/aarch64 binary releases are suffixed
+with `_aarch64`, e.g., `libttsim_wh_aarch64.so`.
 
 ### Building from Source (Wormhole and Blackhole)
 The included source can be built locally:
@@ -66,32 +67,30 @@ For the `libttsim.so` programmatic interface - the exported C entry points, the 
 compatibility policy that governs them - see [libttsim API and ABI](docs/libttsim_api.md).
 
 ### Running with TT-Metalium
-Metal has simulator support out of the box, enabled by setting the `TT_METAL_SIMULATOR`
-environment variable to point to the simulator .so file. The `libttsim.so` must live in
-a directory also containing an SOC descriptor YAML file.
+Metal has simulator support out of the box: set the `TT_METAL_SIMULATOR` environment variable to the simulator
+`.so` file, either a downloaded one or one you built (e.g., `src/_out/release_wh/libttsim.so`).
 
-#### Wormhole
+#### Wormhole and Blackhole
 ```bash
-export TT_METAL_SIMULATOR=~/sim/libttsim_wh.so
-cp $TT_METAL_HOME/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml ~/sim/soc_descriptor.yaml
+export TT_METAL_SIMULATOR=~/sim/libttsim_wh.so # or libttsim_bh.so, or a multichip binary
 
 cd $TT_METAL_HOME
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/programming_examples/metal_example_add_2_integers_in_riscv
 ```
 
-#### Blackhole
-```bash
-export TT_METAL_SIMULATOR=~/sim/libttsim_bh.so
-cp $TT_METAL_HOME/tt_metal/soc_descriptors/blackhole_140_arch.yaml ~/sim/soc_descriptor.yaml
-
-cd $TT_METAL_HOME
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/programming_examples/metal_example_add_2_integers_in_riscv
-```
+Wormhole and Blackhole need no SoC descriptor as of tt-metal 5028883 (#62711, first in v0.83.0-dev20261105):
+tt-metal reads the architecture from the PCI device ID the simulator reports, and on a multichip binary it finds the
+chips and their Ethernet links the way it does on silicon. Older tt-metal, and LLK tests (tt-exalens still reads it),
+need `wormhole_b0_80_arch.yaml` or `blackhole_140_arch.yaml` from `$TT_METAL_HOME/tt_metal/soc_descriptors/` copied
+beside the `.so` as `soc_descriptor.yaml`. A `soc_descriptor.yaml` there always takes precedence, so delete any left
+over from older instructions.
 
 #### Quasar
+Quasar still needs its SoC descriptor beside the `.so`, so give it a directory of its own:
 ```bash
-export TT_METAL_SIMULATOR=~/sim/libttsim_qsr.so
-cp $TT_METAL_HOME/tt_metal/soc_descriptors/quasar_32_arch.yaml ~/sim/soc_descriptor.yaml
+mkdir -p ~/sim/qsr && mv ~/sim/libttsim_qsr.so ~/sim/qsr/
+cp $TT_METAL_HOME/tt_metal/soc_descriptors/quasar_32_arch_ttsim.yaml ~/sim/qsr/soc_descriptor.yaml
+export TT_METAL_SIMULATOR=~/sim/qsr/libttsim_qsr.so
 
 cd $TT_METAL_HOME
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_legacy --gtest_filter=QuasarMeshDeviceSingleCardFixture.SingleDmL1Write
@@ -267,15 +266,10 @@ mode of operation. Set `TT_METAL_SLOW_DISPATCH_MODE=1` to enable it.
 
 SFPLOADMACRO is not supported in the SFPU. Set `TT_METAL_DISABLE_SFPLOADMACRO=1` to disable its usage.
 
-Multichip support and testing is incomplete. UMD changes for full support are not yet fully merged
-for platforms beyond `wh_x2`, though enablement for additional targets is in progress, and the
-`micah/native-sim` branch of `tt-metal` was verified against the `wh_x2`, `wh_x8`, `wh_x32`,
-`bh_x2`, and `bh_x32` simulator builds. An example of a test that has been validated to run on N300,
-P300, T3000, WH Galaxy, and BH Galaxy and not only pass but also dispatch work to all chips in both SD
-and FD mode is
-`tests/ttnn/unit_tests/base_functionality/test_multi_device.py::test_multi_device_single_op_binary`.
-The `bh_x32` binary is x86_64 only at present due to aarch64 linker limitations with the extremely large
-BSS segment this requires.
+Multichip testing is incomplete. Nearly every tt-metal C++ test runs in our CI on `wh_x2` and `bh_x2`, and
+a Galaxy smoke set runs on `wh_x32` and `bh_x32` (in tt-metal's CI too); `wh_x8` and `bh_x4` are covered only by
+our own Ethernet link tests. Fabric smoke tests pass on `bh_x2`; the larger fabric suites are too slow under the
+simulator for now. The `bh_x32` binary is x86_64 only, since aarch64 can't link its extremely large BSS segment.
 
 Not all hardware features are implemented, and the simulator is intentionally more restrictive than silicon
 to help uncover potential issues. Simulator error messages are grouped into the following categories
