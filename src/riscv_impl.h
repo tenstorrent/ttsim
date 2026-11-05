@@ -1488,6 +1488,13 @@ static void RV_XLEN_PREFIX(tti)(RiscvHartState *p_hart, uint32_t inst) {
     TensixState *p_tensix = &g_t_tiles[p_hart->tile_id].tensix[tensix_id];
     if (tensix_can_push_inst(p_tensix, pipe, bypass_mop_expander)) {
         uint32_t tensix_inst = (inst << 30) | (inst >> 2);
+#if TT_ARCH_VERSION == 1
+        // With gathering on, a TRISC can push adjacent TTIs in one store, and a REPLAY recording without Exec that takes
+        // such a store loses count of the thread's instructions; ttsim does not model gathering, so it refuses them all
+        TTSIM_VERIFY(bypass_mop_expander || !p_tensix->replay_left[pipe] || p_tensix->replay_execute_while_loading[pipe] ||
+            (p_hart->chicken_bits & (1u << 18)), UnsupportedFunctionality, "TTI inst=0x%x recorded by a REPLAY without "
+            "Exec while gathering is on; set cfg0 bit 18 (DisTriscCache) before recording", tensix_inst);
+#endif
         tensix_push_inst(p_tensix, pipe, tensix_inst, bypass_mop_expander);
     } else {
         p_hart->pc -= 4; // replay TTI instruction

@@ -65,7 +65,7 @@
 #define INCREASE_REGION_SIZE (1u << 13) // region_ctrl_1: extends a region past 4GiB
 #define IATU_OUTBOUND_WINDOW_LIMIT ((1ull << 58) - 1) // NoC-to-host window is 2^58 bytes
 
-// BH BAR2 read DMA channel 0 registers
+// BH BAR2 read DMA channel 0 registers. The write (D2H) channels are not modeled: HW erratum BH-90, a D2H DMA can hang
 #define DMA_RDCH0_BASE 0x100
 #define DMA_RDCH0_LIMIT 0x1A8
 #define DMA_BUFFER_SIZE (4u * 1024)

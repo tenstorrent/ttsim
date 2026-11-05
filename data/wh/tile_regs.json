@@ -1204,6 +1204,17 @@
       ]
     },
     {
+      "name": "dbi",
+      "regs": [
+        {
+          "offset": "0x78",
+          "rw": "rw",
+          "reset_value": null,
+          "name": "device_control_device_status"
+        }
+      ]
+    },
+    {
       "name": "reset_unit",
       "regs": [
         {

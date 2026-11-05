@@ -396,6 +396,7 @@ uint32_t tensix_cfg_rd32(TensixState *p_tensix, uint32_t bank, uint32_t offset) 
         CFG_REG_BANKED_RD(125)
         CFG_REG_BANKED_RD(126)
         CFG_REG_BANKED_RD(127)
+        case 186: return g_t_tiles[p_tensix->tile_id].risc_prefetch_ctrl; // RISC_PREFETCH_CTRL
 #elif TT_ARCH_VERSION == 1
         CFG_REG_BANKED_RD(12)
         CFG_REG_BANKED_RD(13)
@@ -439,6 +440,7 @@ uint32_t tensix_cfg_rd32(TensixState *p_tensix, uint32_t bank, uint32_t offset) 
         CFG_REG_BANKED_RD(125)
         CFG_REG_BANKED_RD(140)
         CFG_REG_BANKED_RD(141)
+        case 208: return g_t_tiles[p_tensix->tile_id].risc_prefetch_ctrl; // RISC_PREFETCH_CTRL
         CFG_REG_RD(220)
 #endif
 #undef CFG_REG_BANKED_RD
@@ -532,6 +534,7 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
         case 162: p_tile->ncrisc_reset_pc = data; break; // NCRISC_RESET_PC_PC
         case 163: p_tile->ncrisc_reset_pc_override = data; break; // NCRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en
         case 164: seed_prng(p_tensix, data); break; // PRNG_SEED_Seed_Val
+        case 186: risc_prefetch_ctrl_wr(p_tensix->tile_id, 0, data); break; // RISC_PREFETCH_CTRL
 #elif TT_ARCH_VERSION == 1
         CFG_REG_BANKED_WR(12)
         CFG_REG_BANKED_WR(13)
@@ -589,6 +592,7 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
             }
             break;
         case 186: seed_prng(p_tensix, data); break; // PRNG_SEED_Seed_Val
+        case 208: risc_prefetch_ctrl_wr(p_tensix->tile_id, 0, data); break; // RISC_PREFETCH_CTRL
         CFG_REG_WR(209)
         CFG_REG_WR(210)
         CFG_REG_WR(211)
@@ -616,6 +620,7 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
     TTSIM_VERIFY(!p_tensix->DEST_TARGET_REG_CFG_PACK_SEC3_ZOffset, UnsupportedFunctionality, "DEST_TARGET_REG_CFG_PACK_SEC3_ZOffset");
 #if TT_ARCH_VERSION == 1
     TTSIM_VERIFY(!p_tensix->DEST_ACCESS_CFG_disable_full_write_dest_q_bypass, UnsupportedFunctionality, "DEST_ACCESS_CFG_disable_full_write_dest_q_bypass");
+    TTSIM_VERIFY(!p_tensix->DEST_ACCESS_CFG_zeroacc_absolute_tile_mode, UnsupportedFunctionality, "DEST_ACCESS_CFG_zeroacc_absolute_tile_mode");
 #endif
 }
 
@@ -1237,7 +1242,7 @@ TENSIX_EXECUTE_ZEROACC() {
             break;
         case 1: // clear 16 rows
 #if TT_ARCH_VERSION == 1
-            if (!p_tensix->DEST_ACCESS_CFG_zeroacc_absolute_tile_mode && ((dst + dst_offset) & 512)) { // dst counts as a row when picking the half
+            if ((dst + dst_offset) & 512) { // dst counts as a row when picking the half
                 dst += 32;
             }
 #endif
@@ -1248,7 +1253,7 @@ TENSIX_EXECUTE_ZEROACC() {
             break;
 #if TT_ARCH_VERSION == 1
         case 5: // clear 32b 16 rows -- XXX only supported in very limited cases for a HW bug workaround
-            if (!p_tensix->DEST_ACCESS_CFG_zeroacc_absolute_tile_mode && ((dst + dst_offset) & 768)) {
+            if ((dst + dst_offset) & 768) {
                 dst += 16;
             }
             TTSIM_VERIFY(dst < DST_ROWS / 32, NonContractualBehavior, "clear 32b 16 rows: dst=%d", dst);
@@ -1989,7 +1994,7 @@ static bool tensix_elw_op(TensixState *p_tensix, uint32_t pipe, uint32_t dst, ui
     TTSIM_VERIFY((src_b_fmt != 12) && (src_b_fmt != 13), UndefinedBehavior, "src_b_fmt=%d", src_b_fmt);
     if (is_int8) {
         TTSIM_VERIFY(src_a_fmt == 14, UnsupportedFunctionality, "int8 src_a_fmt=%d src_b_fmt=%d", src_a_fmt, src_b_fmt);
-        TTSIM_VERIFY((src_b_fmt == 14) || (src_b_fmt == 15), UnsupportedFunctionality, "int8 src_a_fmt=%d src_b_fmt=%d", src_a_fmt, src_b_fmt); // XXX why bfp2?
+        TTSIM_VERIFY(src_b_fmt == 14, UnsupportedFunctionality, "int8 src_a_fmt=%d src_b_fmt=%d", src_a_fmt, src_b_fmt);
     } else if ((src_a_fmt == 1) || (src_a_fmt == 10)) { // fp16/fp8
         TTSIM_VERIFY(src_a_fmt == src_b_fmt, UnsupportedFunctionality, "fp16 src_a_fmt=%d src_b_fmt=%d", src_a_fmt, src_b_fmt);
     } else {
@@ -2385,6 +2390,10 @@ TENSIX_EXECUTE_PACR() {
     uint32_t intf_shift = !dst_access_mode ? 0 : p_tensix->DEST_ACCESS_CFG_remap_addrs ? 4 : 3;
 #endif
 
+    // Note: HW erratum (WH): a PACR that starts while an earlier one is still packing, with the Dst read format
+    // (Read_32b_data, Dstacc, the packers' formats) changed in between, can hang the packers; not modeled
+    // Note: HW erratum: these Dst reads aren't ordered against later Dst writes (Matrix Unit, SFPSTORE, ZEROACC; on BH
+    // only those within ~3 instructions) nor against an unpack to Dst issued just before; not modeled
     uint32_t state_id = get_state_id(p_tensix, pipe);
     const TensixConfigState *p_config = &p_tensix->config[state_id];
 #if TT_ARCH_VERSION == 1
@@ -2958,7 +2967,7 @@ TENSIX_EXECUTE_PACR() {
             }
             uint32_t sram_addr_bits = (dst_addr << 3) + dst_element_size_bits*i;
             uint32_t sram_addr = sram_addr_bits >> 3;
-            TTSIM_VERIFY(sram_addr_bits + dst_element_size_bits <= TENSIX_SRAM_SIZE*8, UndefinedBehavior, "out of bounds sram_addr=0x%x", sram_addr);
+            TTSIM_VERIFY(in_bounds(sram_addr_bits, dst_element_size_bits, TENSIX_SRAM_SIZE * 8), UndefinedBehavior, "out of bounds sram_addr=0x%x", sram_addr);
             if (dst_element_size_bits == 32) {
                 if (pack_l1_acc) {
                     value = pack_l1_acc_fp32(mem_rd<uint32_t>(&g_t_tiles[p_tensix->tile_id].sram[sram_addr]), value);
@@ -3294,15 +3303,16 @@ TENSIX_EXECUTE_UNPACR() {
         ((ovrd_thread_id && unpack_context) ? p_config->THCON_SEC0_REG7_Offset_cntx1_address : p_config->THCON_SEC0_REG7_Offset_address);
     // Note: ConfigDescriptor.DigestSize (cfg55/95, cfg67/115) is not instantiated and errors on write; always 0
     base_addr = (base_addr + (offset_addr & 0xFFFF) + 1) << 4;
-    bool force_shared_exp = unpack_block_selection ? p_config->THCON_SEC1_REG2_Force_shared_exp
-                                                   : p_config->THCON_SEC0_REG2_Force_shared_exp;
     uint32_t in_addr_exponents = base_addr << 4; // slightly odd: byte address in .4 fixed point
-    bool bfp_exp_stream = is_bfp_format(in_data_format) && !force_shared_exp;
+    bool bfp_exp_stream = is_bfp_format(in_data_format); // Force_shared_exp is refused on write
     if (bfp_exp_stream) { // requires much more complex address computations and loading separate exponent stream
         TTSIM_VERIFY((!bits<5,5>(tile_desc0)), UnsupportedFunctionality, "no_bfp_exp_section");
-        uint32_t num_elements = tile_x_dim * tile_y_dim * tile_z_dim * tile_w_dim; // XXX hopefully this cannot be uint64_t
+        uint32_t num_elements = tile_x_dim * tile_y_dim * tile_z_dim * tile_w_dim; // below 2^32: X and Y * Z * W are 16 bits
         uint32_t num_exponents = (num_elements + 15) / 16; // 1 exponent per 16 sign/magnitudes
-        base_addr += (num_exponents + 15) & ~15; // always make exponents a multiple of 16B
+        uint32_t exp_section_size = (num_exponents + 15) / 16; // always make exponents a multiple of 16B
+        // the hardware counts the section's datums in 24 bits and its 16B units in 16, each wrapping
+        TTSIM_VERIFY(exp_section_size <= 0xFFFF, UnsupportedFunctionality, "bfp exponent section of 0x%x datums", num_elements);
+        base_addr += exp_section_size << 4;
     }
     uint32_t first_datum = p_xy_ctrl->ch0_x +
                            (p_xy_ctrl->ch0_y & 0xFF) * ch0_y_stride +
@@ -3362,7 +3372,7 @@ TENSIX_EXECUTE_UNPACR() {
     TTSIM_VERIFY(p_xy_ctrl->ch0_x <= p_xy_ctrl->ch1_x, UndefinedBehavior, "invalid ch0_x=%d ch1_x=%d", p_xy_ctrl->ch0_x, p_xy_ctrl->ch1_x);
     uint32_t count = p_xy_ctrl->ch1_x - p_xy_ctrl->ch0_x + 1;
     if (bfp_exp_stream) {
-        TTSIM_VERIFY(first_datum + count <= 65536, UndefinedBehavior,
+        TTSIM_VERIFY(in_bounds(first_datum, count, 65536), UndefinedBehavior,
             "bfp exponent index out of range: first_datum=%d count=%d", first_datum, count);
         // BFP4/BFP2 datums may start mid-word only if they also end in it; otherwise silicon garbles them
         TTSIM_VERIFY(!(src_addr_bits & 127) || ((src_addr_bits & 127) + count * in_element_size_bits <= 128), UndefinedBehavior,
@@ -3372,6 +3382,10 @@ TENSIX_EXECUTE_UNPACR() {
     TTSIM_VERIFY(!((in_element_size_bits == 2) && (count & 1)), UnsupportedFunctionality,
         "bfp2 with an odd count=%d", count);
     if (unpack_to_dst) {
+        // Note: HW erratum: SetOvrdWithAddr applies at each Dst write, so a SETC16 that sets it while this unpack is still
+        // writing sends its remaining datums to row & ~0x30; not modeled
+        // Note: HW erratum (Blackhole): these Dst writes share the Matrix Unit's write path, so one in the same cycle as a
+        // Matrix Unit result write, in either half, merges with it (ORed row and data); not modeled
         TTSIM_VERIFY(!p_tensix->thread[pipe].SRCA_SET_SetOvrdWithAddr, UndefinedBehavior, "unpack_to_dst: SRCA_SET_SetOvrdWithAddr=1");
     } else {
         TTSIM_VERIFY(p_tensix->thread[pipe].SRCA_SET_SetOvrdWithAddr, UnsupportedFunctionality, "!unpack_to_dst: SRCA_SET_SetOvrdWithAddr=0");
@@ -3425,20 +3439,41 @@ TENSIX_EXECUTE_UNPACR() {
         TTSIM_VERIFY(!(start_row & (burst_rows - 1)), UnsupportedFunctionality,
             "src_%c start_row=%d burst_rows=%d may span 16-row set boundary and drop writes", 'a' + unpack_block_selection,
             start_row, burst_rows);
-#if TT_ARCH_VERSION == 1
         // Datums that don't start at a 16-byte L1 word reach Src in groups that straddle rows, and a group that
         // straddles a 16-row set boundary loses its datums past the boundary
         uint32_t end_row = (dst_addr + count - 1) / ROW_SIZE;
         TTSIM_VERIFY(!((src_addr_bits & 127) && ((start_row ^ end_row) & ~15u)), UndefinedBehavior,
             "src_%c datums from a misaligned src_addr_bits=0x%x span 16-row set boundary at rows %d..%d and drop writes",
             'a' + unpack_block_selection, src_addr_bits, start_row, end_row);
+    }
+    // Datums that don't start at a 16-byte L1 word reach Src shifted, so the last L1 read group's datums may not fit
+    // in its Src write; the rest go out in one more write after the instruction is done. With SetDatValid that write
+    // comes after the bank switch: those datums are missing from the bank marked valid, and the unpacker waits until
+    // the other bank is free.
+    if (set_dat_valid && !unpack_to_dst && (src_addr_bits & 127) && (in_element_size_bits >= 8)) {
+#if TT_ARCH_VERSION == 0
+        uint32_t group_bytes = (throttle_mode == 2) ? 64 : 0; // groups of 16 or 32 bytes always fit
+#elif TT_ARCH_VERSION == 1
+        uint32_t group_throttle = p_config->THCON_SEC0_REG1_ovrd_default_throttle_mode ? throttle_mode :
+                                  (in_element_size_bits == 8) ? 3 : 2;
+        uint32_t group_bytes = (group_throttle < 2) ? 0 : (in_element_size_bits == 8) ? 64 : 128;
 #endif
+        uint32_t in_bytes = in_element_size_bits / 8, out_bytes = out_element_size_bits / 8;
+        uint32_t start_byte = (src_addr_bits & 127) / 8;
+        uint32_t end_byte = start_byte + count * in_bytes;
+        if (group_bytes && (end_byte > group_bytes)) {
+            uint32_t last_group_bytes = (end_byte - 1) % group_bytes + 1;
+            uint32_t shift = (16 - start_byte * out_bytes / in_bytes) % 16;
+            TTSIM_VERIFY(shift + last_group_bytes * out_bytes / in_bytes <= group_bytes, UndefinedBehavior,
+                "set_dat_valid: datums from a misaligned src_addr_bits=0x%x count=%d end in a write after the bank switch",
+                src_addr_bits, count);
+        }
     }
 
     for (uint32_t i = 0; i < count; i++) {
         uint32_t sram_addr_bits = src_addr_bits + in_element_size_bits*(i & (unpack_row_width - 1)) + row_stride*8*(i >> unpack_row_shift);
         uint32_t sram_addr = sram_addr_bits >> 3;
-        TTSIM_VERIFY(sram_addr_bits + in_element_size_bits <= TENSIX_SRAM_SIZE*8, UndefinedBehavior, "out of bounds sram_addr=0x%x", sram_addr);
+        TTSIM_VERIFY(in_bounds(sram_addr_bits, in_element_size_bits, TENSIX_SRAM_SIZE * 8), UndefinedBehavior, "out of bounds sram_addr=0x%x", sram_addr);
         uint32_t value;
         if (in_element_size_bits == 32) {
             value = mem_rd<uint32_t>(&g_t_tiles[p_tensix->tile_id].sram[sram_addr]);
@@ -3453,15 +3488,9 @@ TENSIX_EXECUTE_UNPACR() {
             }
         }
         if (is_bfp_format(in_data_format)) {
-            uint8_t exp_bits = 0;
-            if (force_shared_exp) {
-                exp_bits = unpack_block_selection ? p_config->UNP1_FORCED_SHARED_EXP_shared_exp
-                                                  : p_config->UNP0_FORCED_SHARED_EXP_shared_exp;
-            } else {
-                uint32_t exp_addr = (in_addr_exponents + i) / 16;
-                TTSIM_VERIFY(exp_addr < TENSIX_SRAM_SIZE, UndefinedBehavior, "out of bounds exp_addr=0x%x", exp_addr);
-                exp_bits = mem_rd<uint8_t>(&g_t_tiles[p_tensix->tile_id].sram[exp_addr]);
-            }
+            uint32_t exp_addr = (in_addr_exponents + i) / 16;
+            TTSIM_VERIFY(exp_addr < TENSIX_SRAM_SIZE, UndefinedBehavior, "out of bounds exp_addr=0x%x", exp_addr);
+            uint8_t exp_bits = mem_rd<uint8_t>(&g_t_tiles[p_tensix->tile_id].sram[exp_addr]);
             TTSIM_VERIFY(!unpack_to_dst, UnsupportedFunctionality, "unpack_to_dst=%d in_data_format=%d", unpack_to_dst, in_data_format);
             if (in_data_format == 6) {
                 // already in bfp8
@@ -3824,16 +3853,16 @@ TENSIX_EXECUTE_SETADCZW() {
         if (cnt_set_mask & (1 << i)) {
             TensixAddrCtrl *p_addr_ctrl = &p_tensix->addr_ctrl[pipe][i];
             if (bit_mask & 1) {
-                p_addr_ctrl->ch0_z_cr = p_addr_ctrl->ch0_z = ch0_x;
+                p_addr_ctrl->ch0_z_cr = p_addr_ctrl->ch0_z = ch0_z;
             }
             if (bit_mask & 2) {
-                p_addr_ctrl->ch0_w_cr = p_addr_ctrl->ch0_w = ch0_y;
+                p_addr_ctrl->ch0_w_cr = p_addr_ctrl->ch0_w = ch0_w;
             }
             if (bit_mask & 4) {
-                p_addr_ctrl->ch1_z_cr = p_addr_ctrl->ch1_z = ch1_x;
+                p_addr_ctrl->ch1_z_cr = p_addr_ctrl->ch1_z = ch1_z;
             }
             if (bit_mask & 8) {
-                p_addr_ctrl->ch1_w_cr = p_addr_ctrl->ch1_w = ch1_y;
+                p_addr_ctrl->ch1_w_cr = p_addr_ctrl->ch1_w = ch1_w;
             }
         }
     }
@@ -3846,10 +3875,10 @@ TENSIX_EXECUTE_INCADCZW() {
     for (uint32_t i = 0; i < 3; i++) {
         if (cnt_set_mask & (1 << i)) {
             TensixAddrCtrl *p_addr_ctrl = &p_tensix->addr_ctrl[pipe][i];
-            p_addr_ctrl->ch0_z = (p_addr_ctrl->ch0_z + ch0_x) & ADC_Z_MASK;
-            p_addr_ctrl->ch0_w = (p_addr_ctrl->ch0_w + ch0_y) & ADC_W_MASK;
-            p_addr_ctrl->ch1_z = (p_addr_ctrl->ch1_z + ch1_x) & ADC_Z_MASK;
-            p_addr_ctrl->ch1_w = (p_addr_ctrl->ch1_w + ch1_y) & ADC_W_MASK;
+            p_addr_ctrl->ch0_z = (p_addr_ctrl->ch0_z + ch0_z) & ADC_Z_MASK;
+            p_addr_ctrl->ch0_w = (p_addr_ctrl->ch0_w + ch0_w) & ADC_W_MASK;
+            p_addr_ctrl->ch1_z = (p_addr_ctrl->ch1_z + ch1_z) & ADC_Z_MASK;
+            p_addr_ctrl->ch1_w = (p_addr_ctrl->ch1_w + ch1_w) & ADC_W_MASK;
         }
     }
     return true;
@@ -3863,19 +3892,19 @@ TENSIX_EXECUTE_ADDRCRZW() {
         if (cnt_set_mask & (1 << i)) {
             TensixAddrCtrl *p_addr_ctrl = &p_tensix->addr_ctrl[pipe][i];
             if (bit_mask & 1) {
-                p_addr_ctrl->ch0_z_cr = (p_addr_ctrl->ch0_z_cr + ch0_x) & ADC_Z_MASK;
+                p_addr_ctrl->ch0_z_cr = (p_addr_ctrl->ch0_z_cr + ch0_z) & ADC_Z_MASK;
                 p_addr_ctrl->ch0_z = p_addr_ctrl->ch0_z_cr;
             }
             if (bit_mask & 2) {
-                p_addr_ctrl->ch0_w_cr = (p_addr_ctrl->ch0_w_cr + ch0_y) & ADC_W_MASK;
+                p_addr_ctrl->ch0_w_cr = (p_addr_ctrl->ch0_w_cr + ch0_w) & ADC_W_MASK;
                 p_addr_ctrl->ch0_w = p_addr_ctrl->ch0_w_cr;
             }
             if (bit_mask & 4) {
-                p_addr_ctrl->ch1_z_cr = (p_addr_ctrl->ch1_z_cr + ch1_x) & ADC_Z_MASK;
+                p_addr_ctrl->ch1_z_cr = (p_addr_ctrl->ch1_z_cr + ch1_z) & ADC_Z_MASK;
                 p_addr_ctrl->ch1_z = p_addr_ctrl->ch1_z_cr;
             }
             if (bit_mask & 8) {
-                p_addr_ctrl->ch1_w_cr = (p_addr_ctrl->ch1_w_cr + ch1_y) & ADC_W_MASK;
+                p_addr_ctrl->ch1_w_cr = (p_addr_ctrl->ch1_w_cr + ch1_w) & ADC_W_MASK;
                 p_addr_ctrl->ch1_w = p_addr_ctrl->ch1_w_cr;
             }
         }
@@ -3987,7 +4016,8 @@ TENSIX_EXECUTE_SFPLOAD() {
             instr_mod0 = 3;
         } else {
             uint32_t src_b_fmt = math_srcb_cfg_format(p_config);
-            if ((src_b_fmt == 0) || (src_b_fmt == 5) || (src_b_fmt == 6) || (src_b_fmt == 7) || (src_b_fmt == 9)) { // fp32, bf16, bfp8, bfp4, int16
+            if ((src_b_fmt == 0) || (src_b_fmt == 5) || (src_b_fmt == 6) || (src_b_fmt == 7) || // fp32, bf16, bfp8, bfp4
+                (src_b_fmt == 9) || (src_b_fmt == 15)) { // int16, bfp2
                 instr_mod0 = 2;
             } else {
                 TTSIM_VERIFY(src_b_fmt == 1, UnsupportedFunctionality, "src_b_fmt=%d", src_b_fmt); // fp16
@@ -4179,6 +4209,12 @@ TENSIX_EXECUTE_SFPSTORE() {
             TTSIM_ERROR(AssertionFailure, "instr_mod0=%d", instr_mod0);
         }
     });
+    // The store marks all four rows of its group written, the rows of lanes it leaves disabled too; their cells keep
+    // their old contents
+    bool is_32b = (instr_mod0 == 3) || (instr_mod0 == 4) || (instr_mod0 == 7) || (instr_mod0 == 9) || (instr_mod0 == 12);
+    for (uint32_t row = dst_row & ~3u; row < (dst_row & ~3u) + 4; row++) {
+        p_tensix->dst_row_valid[dst_valid_row(p_tensix, row, is_32b)] = true;
+    }
     math_update_counters(p_tensix, pipe, sfpu_addr_mode, false);
     return true;
 }
@@ -5652,6 +5688,9 @@ TENSIX_EXECUTE_SETC16() {
 #undef THREAD_CFG_REG_WR
         default: TTSIM_ERROR(UnsupportedFunctionality, "setc16_reg=%d", setc16_reg);
     }
+#if TT_ARCH_VERSION == 1
+    TTSIM_VERIFY(!p_tensix->thread[pipe].CFG_STATE_ID_StateID, UnsupportedFunctionality, "CFG_STATE_ID_StateID");
+#endif
     return true;
 }
 

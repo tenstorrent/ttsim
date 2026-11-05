@@ -1551,6 +1551,7 @@
    {
     "shift": 0,
     "size": 8,
+    "unsupported": true,
     "name": "UNP0_FORCED_SHARED_EXP_shared_exp"
    },
    {
@@ -1613,6 +1614,7 @@
    {
     "shift": 0,
     "size": 8,
+    "unsupported": true,
     "name": "UNP1_FORCED_SHARED_EXP_shared_exp"
    },
    {
@@ -1903,6 +1905,7 @@
    {
     "shift": 8,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC0_REG2_Force_shared_exp"
    },
    {
@@ -2242,6 +2245,7 @@
    {
     "shift": 8,
     "size": 1,
+    "unsupported": true,
     "name": "THCON_SEC1_REG2_Force_shared_exp"
    },
    {

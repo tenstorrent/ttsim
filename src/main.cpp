@@ -60,6 +60,8 @@ int main(int argc, char **argv) {
     LoadBin loads[MAX_LOAD_BINS];
     uint32_t num_loads = 0;
     uint64_t init_a0 = 0, init_a1 = 0;
+    bool fw_dynamic = false;
+    uint64_t fw_dynamic_next = 0;
     const char *disk_path = nullptr;
     bool disk_persist = false;
     bool interactive = false;
@@ -99,6 +101,9 @@ int main(int argc, char **argv) {
             } else {
                 TTSIM_ERROR(ConfigurationError, "--set-reg only supports a0 and a1, not '%s'", name);
             }
+        } else if (!strcmp(a, "--fw-dynamic-next")) {
+            fw_dynamic = true;
+            fw_dynamic_next = parse_u64(val(++i));
         } else if (!strcmp(a, "--load-bin")) {
             TTSIM_VERIFY(num_loads < MAX_LOAD_BINS, ConfigurationError, "too many --load-bin entries");
             loads[num_loads].path = val(++i);
@@ -171,6 +176,9 @@ int main(int argc, char **argv) {
 
     h0->pc = entry; // hart0 entry point
     rv64_sys_init_reset_rom(sys, entry, h0->x_regs[11]);
+    if (fw_dynamic) {
+        h0->x_regs[12] = rv64_sys_set_fw_dynamic_info(sys, fw_dynamic_next);
+    }
     for (uint32_t i = 1; i < num_harts; i++) {
         Rv64SysHartState *hi = rv64_sys_hart(sys, i);
         hi->pc = rv64_sys_reset_rom_base(); // other HARTs start at the reset ROM in WFI

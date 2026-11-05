@@ -397,6 +397,7 @@ struct TensixTile {
     uint32_t trisc_reset_pc_override;
     uint32_t ncrisc_reset_pc;
     uint32_t ncrisc_reset_pc_override;
+    uint32_t risc_prefetch_ctrl;
 };
 
 // An eth core that was sent work or started some in the last ETH_BUSY_CLOCKS clocks takes ETH_BUSY_STEPS steps per
@@ -565,8 +566,8 @@ struct PcieTile {
     uint64_t tlb_cfg[186];
 #elif TT_ARCH_VERSION == 1
     uint32_t tlb_cfg[210 * 3];
-    uint32_t dbi_device_control;
 #endif
+    uint32_t dbi_device_control;
 };
 
 struct DramChannel {
@@ -638,6 +639,7 @@ void tensix_frontend_step(TensixState *p_tensix, uint32_t pipe);
 void tensix_push_inst(TensixState *p_tensix, uint32_t pipe, uint32_t inst, bool bypass_mop_expander);
 uint32_t tensix_cfg_rd32(TensixState *p_tensix, uint32_t bank, uint32_t offset);
 void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint32_t data);
+void risc_prefetch_ctrl_wr(uint32_t tile_id, uint32_t tensix_id, uint32_t data);
 uint32_t tensix_debug_array_rd32(const TensixState *p_tensix, uint32_t cmd);
 uint32_t tensix_dst_rd32(TensixState *p_tensix, uint32_t pipe, uint32_t offset);
 uint32_t tensix_tile_counter_rd32(TensixState *p_tensix, uint32_t counter, uint32_t index);

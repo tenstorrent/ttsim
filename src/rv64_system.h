@@ -6,6 +6,8 @@
 #include "common.h"
 #include "riscv_defines.h"
 
+#define MAX_HARTS 16
+
 enum class MemAccess { Fetch, Load, Store };
 
 struct RvSystem; // the board (DRAM + devices), defined in rv64_system.cpp
@@ -20,11 +22,30 @@ struct TlbEntry {
     uint8_t *host_page;
 };
 static_assert(sizeof(TlbEntry) == 16, "L1 TLB entry must stay 16 bytes");
+// PMP: 16 entries (spike's default), granularity 4 bytes (G = 0)
+#define PMP_N 16u
+#define PMP_R 0x01u
+#define PMP_W 0x02u
+#define PMP_X 0x04u
+#define PMP_A 0x18u
+#define PMP_A_TOR 0x08u
+#define PMP_A_NA4 0x10u
+#define PMP_A_NAPOT 0x18u
+#define PMP_L 0x80u
+#define PMPADDR_MASK ((1ull << 54) - 1) // pmpaddr holds physical address bits 55:2
+
+struct PmpSeg { // physical addresses [lo, last] whose first matching PMP entry is the same one (or none)
+    uint64_t lo;
+    uint64_t last;
+    uint32_t allow; // bits 0-2: S/U may read, write, execute; bits 3-5: M may
+};
+
 struct L2TlbEntry {
     uint64_t vpn;
     uint64_t tag;
     uint64_t pa_page;
     uint64_t pte;
+    uint32_t pmp_allow; // what PMP allows S/U on the whole page (PmpSeg::allow's bits 0-2), 0 if it varies
 };
 
 struct Rv64SysHartState {
@@ -61,8 +82,8 @@ struct Rv64SysHartState {
     uint64_t senvcfg;
     uint64_t sie_unused; // sie/sip are views of mie/mip masked by mideleg
     uint32_t fcsr;
-    uint64_t pmpcfg[2];
-    uint64_t pmpaddr[16];
+    uint8_t pmpcfg[PMP_N];
+    uint64_t pmpaddr[PMP_N];
     uint64_t mhpmcounter[32]; // plain storage so OpenSBI's accesses do not trap; not a real performance model.
     uint64_t mhpmevent[32];
 
@@ -90,6 +111,14 @@ struct Rv64SysHartState {
     L2TlbEntry l2tlb[L2TLB_N];
 
     uint64_t steps_left;
+    bool itlb_once; // itlb[0] is valid for the current instruction only (PMP doesn't allow its whole page)
+
+    PmpSeg pmp_segs[2 * PMP_N + 1]; // the whole address space, in order
+    uint32_t pmp_nsegs;
+    uint32_t pmp_seg_last; // the segment the last check found
+    uint32_t pmp_nrules; // entries that can match (A != OFF, not an empty TOR range)
+    bool pmp_m_fast; // no rule is locked and every rule's bounds are 8-byte aligned: an M-mode access that
+                     // doesn't cross an 8-byte boundary can't fail PMP
 };
 
 static inline uint8_t *rv64_dtlb_host(Rv64SysHartState *p_hart, uint64_t vaddr, uint32_t size, bool is_store) {
@@ -130,6 +159,7 @@ RvSystem *rv64_sys_create(uint64_t dram_base, uint64_t dram_size, uint32_t num_h
                           uint32_t timer_insns_per_tick);
 Rv64SysHartState *rv64_sys_hart(RvSystem *p_sys, uint32_t hart_id);
 void rv64_sys_init_reset_rom(RvSystem *p_sys, uint64_t entry, uint64_t fdt_addr);
+uint64_t rv64_sys_set_fw_dynamic_info(RvSystem *p_sys, uint64_t next_addr);
 uint64_t rv64_sys_reset_rom_base();
 void rv64_sys_pause_yield(Rv64SysHartState *p_hart);
 void rv64_sys_lr_reserve(Rv64SysHartState *p_hart, uint64_t vaddr, uint32_t size);

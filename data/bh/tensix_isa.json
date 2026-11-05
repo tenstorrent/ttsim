@@ -2,8 +2,8 @@
  "MOP": {
   "opcode": 1,
   "args": {
-   "zmask_lo16_or_loop_count": "0:0",
-   "loop_count": "16:16",
+   "zmask_lo16_or_loop_count": "15:0",
+   "loop_count": "22:16",
    "mop_type": "23:23"
   }
  },
@@ -14,7 +14,7 @@
  "MOP_CFG": {
   "opcode": 3,
   "args": {
-   "zmask_hi16": "0:0"
+   "zmask_hi16": "15:0"
   }
  },
  "REPLAY": {
@@ -22,8 +22,8 @@
   "args": {
    "load_mode": "0:0",
    "execute_while_loading": "1:1",
-   "len": "4:4",
-   "start_idx": "14:14"
+   "len": "9:4",
+   "start_idx": "18:14"
   }
  },
  "RESOURCEDECL": {
@@ -417,20 +417,20 @@
   "opcode": 84,
   "args": {
    "bit_mask": "3:0",
-   "ch0_x": "8:6",
-   "ch0_y": "11:9",
-   "ch1_x": "14:12",
-   "ch1_y": "17:15",
+   "ch0_z": "8:6",
+   "ch0_w": "11:9",
+   "ch1_z": "14:12",
+   "ch1_w": "17:15",
    "cnt_set_mask": "23:21"
   }
  },
  "INCADCZW": {
   "opcode": 85,
   "args": {
-   "ch0_x": "8:6",
-   "ch0_y": "11:9",
-   "ch1_x": "14:12",
-   "ch1_y": "17:15",
+   "ch0_z": "8:6",
+   "ch0_w": "11:9",
+   "ch1_z": "14:12",
+   "ch1_w": "17:15",
    "cnt_set_mask": "23:21"
   }
  },
@@ -438,10 +438,10 @@
   "opcode": 86,
   "args": {
    "bit_mask": "3:0",
-   "ch0_x": "8:6",
-   "ch0_y": "11:9",
-   "ch1_x": "14:12",
-   "ch1_y": "17:15",
+   "ch0_z": "8:6",
+   "ch0_w": "11:9",
+   "ch1_z": "14:12",
+   "ch1_w": "17:15",
    "cnt_set_mask": "23:21"
   }
  },

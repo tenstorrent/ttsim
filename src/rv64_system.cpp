@@ -8,6 +8,7 @@
 #define RiscvHartState Rv64SysHartState
 #include "riscv_impl.h" // pulls in rv64_system.h
 
+#include <algorithm>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -15,8 +16,6 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/mman.h>
-
-#define MAX_HARTS 16
 
 // Interrupt bits that wake a hart from WFI
 #define MIP_PLATFORM_MASK (MIP_MSIP | MIP_MTIP | MIP_SEIP | MIP_MEIP)
@@ -102,6 +101,7 @@ struct RvSystem {
     uint64_t insn_count; // all instructions executed (excludes a faulting fetch)
     uint64_t visible_icount; // retired (drives mtime; includes cause-12 inst-page faults)
     uint64_t cause12_count; // cause-12 inst-page faults; cycle/instret == visible - this
+    uint64_t ecall_ebreak_count; // ECALL/EBREAK traps: counted in visible_icount, but they do not retire
 
     Rv64SysHartState harts[MAX_HARTS];
 
@@ -166,6 +166,7 @@ static void hart_write_mip(Rv64SysHartState *p_hart, uint64_t v);
 static void fault(Rv64SysHartState *p_hart, uint64_t cause, uint64_t tval);
 static void take_trap(Rv64SysHartState *p_hart, uint64_t *npc, uint64_t cause, uint64_t tval, bool is_interrupt);
 static void check_interrupts(Rv64SysHartState *p_hart);
+static void pmp_update(Rv64SysHartState *h);
 static inline uint64_t current_insn_pc(const Rv64SysHartState *p_hart);
 
 static inline void tlb_flush_l1(Rv64SysHartState *p_hart) {
@@ -201,7 +202,7 @@ RvSystem *rv64_sys_create(uint64_t dram_base, uint64_t dram_size, uint32_t num_h
         p_hart->p_sys = p_sys;
         p_hart->hart_id = i;
         p_hart->priv = PRIV_M;
-        tlb_flush_l1(p_hart);
+        pmp_update(p_hart); // no PMP entry is active at reset
         // misa: RV64 (MXL=2) with extensions IMAFDC
         const uint64_t ext = (1u << ('I' - 'A')) | (1u << ('M' - 'A')) | (1u << ('A' - 'A')) |
                              (1u << ('F' - 'A')) | (1u << ('D' - 'A')) | (1u << ('C' - 'A')) |
@@ -230,6 +231,19 @@ void rv64_sys_init_reset_rom(RvSystem *p_sys, uint64_t entry, uint64_t fdt_addr)
     memcpy(p_sys->reset_rom, rom, sizeof(rom));
     mem_wr<uint64_t>(p_sys->reset_rom + 0x18, entry);    // read by `ld t0,24(t0)`
     mem_wr<uint64_t>(p_sys->reset_rom + 0x20, fdt_addr); // read by `ld a1,32(t0)`
+}
+
+// OpenSBI's fw_dynamic info block (version 2), at the address the reset ROM passes in a2 (`addi a2,t0,40`), where
+uint64_t rv64_sys_set_fw_dynamic_info(RvSystem *p_sys, uint64_t next_addr) {
+    static const uint64_t FW_DYNAMIC_INFO_OFFSET = 0x28;
+    uint8_t *p = p_sys->reset_rom + FW_DYNAMIC_INFO_OFFSET;
+    mem_wr<uint64_t>(p + 0x00, 0x4942534full); // magic "OSBI"
+    mem_wr<uint64_t>(p + 0x08, 2);             // version
+    mem_wr<uint64_t>(p + 0x10, next_addr);     // next_addr
+    mem_wr<uint64_t>(p + 0x18, 1);             // next_mode: S
+    mem_wr<uint64_t>(p + 0x20, 0);             // options
+    mem_wr<uint64_t>(p + 0x28, 0);             // boot_hart
+    return RESET_ROM_BASE + FW_DYNAMIC_INFO_OFFSET;
 }
 
 uint64_t rv64_sys_reset_rom_base() {
@@ -279,6 +293,9 @@ static void clint_write(RvSystem *p_sys, uint32_t offset, uint32_t size, uint64_
     TTSIM_VERIFY((size == 4) || (size == 8), UnimplementedFunctionality, "size=%d", size);
     TTSIM_VERIFY(!(offset & (size - 1)), UnimplementedFunctionality, "misaligned offset=0x%x", offset);
     if ((offset >= 0x4000) && (offset < 0x4000 + 8 * MAX_HARTS)) {
+        if ((offset - 0x4000) / 8 >= p_sys->num_harts) {
+            return; // no such hart
+        }
         uint64_t *p = &p_sys->mtimecmp[(offset - 0x4000) / 8];
         if (size == 4) {
             *p = (offset & 4) ? ((*p & 0xFFFFFFFFull) | (val << 32)) : ((*p & ~0xFFFFFFFFull) | uint32_t(val));
@@ -293,8 +310,11 @@ static void clint_write(RvSystem *p_sys, uint32_t offset, uint32_t size, uint64_
     }
     if (offset < 4 * MAX_HARTS) {
         uint32_t hart_id = uint32_t(offset / 4);
+        if (hart_id >= p_sys->num_harts) {
+            return; // no such hart
+        }
         p_sys->msip[hart_id] = val & 1;
-        if ((hart_id < p_sys->num_harts) && (val & 1) && p_sys->active_hart && (p_sys->active_hart->hart_id != hart_id)) {
+        if ((val & 1) && p_sys->active_hart && (p_sys->active_hart->hart_id != hart_id)) {
             p_sys->yield_hart = hart_id; // yield immediately to target hart on IPI
             p_sys->active_hart->steps_left = 0;
         }
@@ -546,10 +566,11 @@ static void plic_update(RvSystem *p_sys) {
 static uint64_t plic_read(RvSystem *p_sys, uint32_t offset) {
     TTSIM_VERIFY(!(offset & 3), UnimplementedFunctionality, "misaligned offset=0x%x", offset);
     if (offset < 0x1000) {
-        return p_sys->plic_priority[offset / 4];
+        return (offset / 4 <= PLIC_NDEV) ? p_sys->plic_priority[offset / 4] : 0;
     }
     if ((offset >= 0x1000) && (offset < 0x1080)) {
-        return p_sys->plic_pending[(offset - 0x1000) / 4];
+        uint32_t w = (offset - 0x1000) / 4;
+        return (w < 2) ? p_sys->plic_pending[w] : 0;
     }
     if ((offset >= 0x2000) && (offset < 0x2000 + 0x80 * 2 * MAX_HARTS)) {
         uint32_t ctx = (offset - 0x2000) / 0x80;
@@ -662,8 +683,7 @@ void rv64_sys_uart_stop(RvSystem *p_sys, const char *text) {
 }
 
 static inline uint8_t *virtio_dram_ptr(RvSystem *p_sys, uint64_t addr, uint64_t len) {
-    if ((addr >= p_sys->dram_base) && (len <= p_sys->dram_size) &&
-        (addr + len <= p_sys->dram_base + p_sys->dram_size)) {
+    if (rv64_sys_in_dram(p_sys, addr, len)) {
         return p_sys->dram + (addr - p_sys->dram_base);
     }
     return nullptr;
@@ -988,9 +1008,6 @@ static uint64_t device_read(RvSystem *p_sys, uint64_t paddr, uint32_t size) {
                 return ret;
             }
         }
-        if ((paddr == 0x78) && (size == 4)) {
-            return 0; // XXX Need to track down mysterious read and get rid of this
-        }
     }
     TTSIM_ERROR(UnimplementedFunctionality, "paddr=0x%llx size=%d", paddr, size);
 }
@@ -1075,8 +1092,10 @@ void rv64_sys_tt_attach(RvSystem *p_sys, const char *path) {
     p_sys->tt_active = true;
 }
 
+// paddr + size may wrap past 2^64: compare offsets instead
 static inline bool in_dram(RvSystem *p_sys, uint64_t paddr, uint32_t size) {
-    return (paddr >= p_sys->dram_base) && (paddr + size <= p_sys->dram_base + p_sys->dram_size);
+    return (paddr >= p_sys->dram_base) && (size <= p_sys->dram_size) &&
+           (paddr - p_sys->dram_base <= p_sys->dram_size - size);
 }
 
 // Public 64-bit-size variant for the loader (file sizes can exceed 32 bits); overflow-safe form.
@@ -1090,6 +1109,7 @@ void rv64_phys_read(RvSystem *p_sys, uint64_t paddr, void *dst, uint32_t size) {
         memcpy(dst, p_sys->dram + (paddr - p_sys->dram_base), size);
         return;
     }
+    TTSIM_VERIFY(size <= 8, UnimplementedFunctionality, "%u-byte device read at paddr=0x%llx", size, paddr);
     uint64_t v = device_read(p_sys, paddr, size);
     memcpy(dst, &v, size);
 }
@@ -1099,6 +1119,7 @@ void rv64_phys_write(RvSystem *p_sys, uint64_t paddr, const void *src, uint32_t 
         memcpy(p_sys->dram + (paddr - p_sys->dram_base), src, size);
         return;
     }
+    TTSIM_VERIFY(size <= 8, UnimplementedFunctionality, "%u-byte device write at paddr=0x%llx", size, paddr);
     uint64_t v = 0;
     memcpy(&v, src, size);
     device_write(p_sys, paddr, size, v);
@@ -1125,6 +1146,126 @@ static inline void clear_load_reservations_if_overlap(RvSystem *p_sys, const Rv6
     }
 }
 
+// PMP (physical memory protection). Whenever a pmpcfg or pmpaddr changes, the entries are flattened into
+// segments of the address space, each the largest range whose first matching entry is the same one (or none),
+// with that entry's decision for S/U and for M. An access spanning two segments fails: the lowest-numbered entry
+// that matches any of its bytes can't match all of them. The L1 TLBs only cache a page PMP allows whole, so a TLB
+// hit needs no check. PMP changes flush the TLBs.
+static void pmp_update(Rv64SysHartState *h) {
+    struct {
+        uint64_t lo, hi;
+        uint32_t perm;
+    } rules[PMP_N];
+    uint32_t n = 0;
+    bool m_fast = true;
+    for (uint32_t i = 0; i < PMP_N; i++) {
+        uint32_t cfg = h->pmpcfg[i];
+        uint64_t addr = h->pmpaddr[i] << 2;
+        uint64_t lo, hi;
+        switch (cfg & PMP_A) {
+            case PMP_A_TOR:
+                lo = (i == 0) ? 0 : (h->pmpaddr[i - 1] << 2);
+                hi = addr;
+                break;
+            case PMP_A_NA4:
+                lo = addr;
+                hi = addr + 4;
+                break;
+            case PMP_A_NAPOT: {
+                uint64_t size = 8ull << __builtin_ctzll(~h->pmpaddr[i]); // pmpaddr's trailing ones give the size
+                lo = addr & ~(size - 1);
+                hi = lo + size;
+                break;
+            }
+            default:
+                continue; // OFF
+        }
+        if (lo >= hi) {
+            continue; // an empty TOR range matches nothing
+        }
+        rules[n++] = {lo, hi, cfg & (PMP_R | PMP_W | PMP_X | PMP_L)};
+        if ((cfg & PMP_L) || ((lo | hi) & 7)) {
+            m_fast = false;
+        }
+    }
+    h->pmp_nrules = n;
+    h->pmp_m_fast = m_fast;
+
+    uint64_t bounds[2 * PMP_N + 1];
+    uint32_t nb = 0;
+    bounds[nb++] = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        bounds[nb++] = rules[i].lo;
+        bounds[nb++] = rules[i].hi;
+    }
+    std::sort(bounds, bounds + nb);
+    nb = uint32_t(std::unique(bounds, bounds + nb) - bounds);
+    h->pmp_nsegs = 0;
+    int prev_rule = -2;
+    for (uint32_t b = 0; b < nb; b++) {
+        int first = -1; // the first entry matching [bounds[b], next bound): every entry matches it all or none of it
+        for (uint32_t i = 0; i < n; i++) {
+            if ((bounds[b] >= rules[i].lo) && (bounds[b] < rules[i].hi)) {
+                first = int(i);
+                break;
+            }
+        }
+        if (first == prev_rule) {
+            continue; // the same first entry as the segment before: one segment
+        }
+        uint32_t allow = (PMP_R | PMP_W | PMP_X) << 3; // no entry: M may do anything, S and U nothing
+        if (first >= 0) {
+            uint32_t perm = rules[first].perm & (PMP_R | PMP_W | PMP_X);
+            allow = perm | ((rules[first].perm & PMP_L) ? perm : (PMP_R | PMP_W | PMP_X)) << 3;
+        }
+        if (h->pmp_nsegs) {
+            h->pmp_segs[h->pmp_nsegs - 1].last = bounds[b] - 1;
+        }
+        h->pmp_segs[h->pmp_nsegs++] = {bounds[b], ~0ull, allow};
+        prev_rule = first;
+    }
+    h->pmp_seg_last = 0;
+    tlb_flush(h);
+}
+
+// Whether PMP allows an access of len bytes at physical address pa (not crossing a page) at privilege priv. The
+// first entry that matches any byte decides, and fails the access if it doesn't match every byte; with none, M
+// may and S/U may not (entries are implemented).
+static inline uint32_t pmp_need(MemAccess acc) {
+    return (acc == MemAccess::Fetch) ? PMP_X : (acc == MemAccess::Store) ? PMP_W : PMP_R;
+}
+
+static const PmpSeg *pmp_seg(Rv64SysHartState *h, uint64_t pa) {
+    const PmpSeg *s = &h->pmp_segs[h->pmp_seg_last];
+    if ((pa < s->lo) || (pa > s->last)) {
+        uint32_t i = 0;
+        while (pa > h->pmp_segs[i].last) {
+            i++;
+        }
+        h->pmp_seg_last = i;
+        s = &h->pmp_segs[i];
+    }
+    return s;
+}
+
+static bool pmp_ok(Rv64SysHartState *h, uint64_t pa, uint64_t len, MemAccess acc, uint32_t priv) {
+    const PmpSeg *s = pmp_seg(h, pa);
+    if (pa + len - 1 > s->last) {
+        return false;
+    }
+    return (s->allow >> ((priv == PRIV_M) ? 3 : 0)) & pmp_need(acc);
+}
+
+// What PMP allows S/U on the whole page at pa_page (PmpSeg::allow's bits 0-2), or 0 if that varies in the page.
+static uint32_t pmp_page_allow_su(Rv64SysHartState *h, uint64_t pa_page) {
+    const PmpSeg *s = pmp_seg(h, pa_page);
+    return (pa_page + 0xFFF <= s->last) ? (s->allow & (PMP_R | PMP_W | PMP_X)) : 0;
+}
+
+static inline uint64_t access_fault_cause(MemAccess acc) {
+    return (acc == MemAccess::Fetch) ? EXC_INST_ACCESS : (acc == MemAccess::Store) ? EXC_STORE_ACCESS : EXC_LOAD_ACCESS;
+}
+
 static inline bool pte_access_ok(const Rv64SysHartState *h, uint64_t pte, MemAccess acc, uint32_t eff_priv) {
     if (!(pte & PTE_A)) {
         return false;
@@ -1148,20 +1289,23 @@ static inline uint64_t l2_tlb_tag(const Rv64SysHartState *h) {
 }
 
 static __attribute__((noinline)) bool translate_slow(Rv64SysHartState *h, uint64_t vaddr, MemAccess acc,
-                                                     uint32_t eff_priv, uint64_t vpn_full, uint64_t *paddr) {
+    uint32_t size, uint32_t eff_priv, uint64_t vpn_full, uint64_t *paddr, bool *page_ok) {
     uint32_t mode = (h->satp >> SATP_MODE_SHIFT) & 15;
     TTSIM_VERIFY(mode == SATP_MODE_SV39, UnimplementedFunctionality, "satp mode=%d (only Sv39 supported)", mode);
 
     uint64_t fault_cause = (acc == MemAccess::Fetch) ? EXC_INST_PAGE_FAULT :
                            (acc == MemAccess::Store) ? EXC_STORE_PAGE_FAULT : EXC_LOAD_PAGE_FAULT;
+    uint64_t access_cause = access_fault_cause(acc);
 
     L2TlbEntry *l2 = &h->l2tlb[vpn_full & (L2TLB_N - 1)];
     uint64_t l2tag = l2_tlb_tag(h);
     uint64_t ppn_base;
+    uint32_t pmp_allow;
     if ((l2->tag == l2tag) && (l2->vpn == vpn_full) && pte_access_ok(h, l2->pte, acc, eff_priv)) {
         ppn_base = l2->pa_page;
+        pmp_allow = l2->pmp_allow;
     } else {
-        if (((int64_t(vaddr) >> 39) != 0) && ((int64_t(vaddr) >> 39) != -1)) { // VA must be canonical
+        if (((int64_t(vaddr) >> 38) != 0) && ((int64_t(vaddr) >> 38) != -1)) { // bits 63:39 must equal bit 38
             rv64_sys_raise(h, fault_cause, vaddr);
             return false;
         }
@@ -1172,12 +1316,15 @@ static __attribute__((noinline)) bool translate_slow(Rv64SysHartState *h, uint64
         bool found = false;
         for (int lv = 2; lv >= 0; lv--) {
             pte_addr = a + vpn[lv] * 8;
-            if (!in_dram(h->p_sys, pte_addr, 8)) {
-                rv64_sys_raise(h, fault_cause, vaddr);
+            // a PTE read outside memory, or that PMP denies S-mode, is an access fault of the access's type
+            if (!in_dram(h->p_sys, pte_addr, 8) || !pmp_ok(h, pte_addr, 8, MemAccess::Load, PRIV_S)) {
+                rv64_sys_raise(h, access_cause, vaddr);
                 return false;
             }
             rv64_phys_read(h->p_sys, pte_addr, &pte, 8);
-            if (!(pte & PTE_V) || (!(pte & PTE_R) && (pte & PTE_W))) {
+            // Bits 63:54 are reserved (no Svnapot, Svpbmt or Svrsw60t59b), and so are D, A and U in a non-leaf PTE
+            if (!(pte & PTE_V) || (!(pte & PTE_R) && (pte & PTE_W)) || (pte >> 54) ||
+                (!(pte & (PTE_R | PTE_X)) && (pte & (PTE_D | PTE_A | PTE_U)))) {
                 rv64_sys_raise(h, fault_cause, vaddr);
                 return false;
             }
@@ -1223,6 +1370,10 @@ static __attribute__((noinline)) bool translate_slow(Rv64SysHartState *h, uint64
         // set A (and D on store); set-on-access, written once.
         uint64_t newpte = pte | PTE_A | ((acc == MemAccess::Store) ? PTE_D : 0);
         if (newpte != pte) {
+            if (!pmp_ok(h, pte_addr, 8, MemAccess::Store, PRIV_S)) {
+                rv64_sys_raise(h, access_cause, vaddr);
+                return false;
+            }
             rv64_phys_write(h->p_sys, pte_addr, &newpte, 8);
             if (h->p_sys->num_harts > 1) { // a PTE A/D write is a store too (cross-hart only)
                 clear_load_reservations_if_overlap(h->p_sys, h, pte_addr, 8);
@@ -1238,18 +1389,26 @@ static __attribute__((noinline)) bool translate_slow(Rv64SysHartState *h, uint64
         } else {
             ppn_base = ((ppn >> 18) << 30) | (vpn[1] << 21) | (vpn[0] << 12);
         }
+        pmp_allow = pmp_page_allow_su(h, ppn_base);
         if ((ppn_base >= h->p_sys->dram_base) && (ppn_base + 4096 <= h->p_sys->dram_base + h->p_sys->dram_size)) {
             l2->vpn = vpn_full;
             l2->tag = l2tag;
             l2->pa_page = ppn_base;
             l2->pte = pte;
+            l2->pmp_allow = pmp_allow;
         } else {
             l2->tag = 0; // do not cache MMIO leaves
         }
     }
 
+    *paddr = ppn_base | (vaddr & 0xFFF);
+    *page_ok = pmp_allow & pmp_need(acc);
+    if (!*page_ok && !pmp_ok(h, *paddr, size, acc, eff_priv)) {
+        rv64_sys_raise(h, access_cause, vaddr);
+        return false;
+    }
     bool page_in_dram = (ppn_base >= h->p_sys->dram_base) &&
-                        (ppn_base + 4096 <= h->p_sys->dram_base + h->p_sys->dram_size);
+                        (ppn_base + 4096 <= h->p_sys->dram_base + h->p_sys->dram_size) && *page_ok;
     TlbEntry *l1 = (acc == MemAccess::Fetch) ? &h->itlb[0] :
                    (acc == MemAccess::Store) ? &h->dtlb_store[vpn_full & (DTLB_N - 1)] :
                                                &h->dtlb_load[vpn_full & (DTLB_N - 1)];
@@ -1261,11 +1420,13 @@ static __attribute__((noinline)) bool translate_slow(Rv64SysHartState *h, uint64
             l1->vpn = ~uint64_t(0);
         }
     }
-    *paddr = ppn_base | (vaddr & 0xFFF);
     return true;
 }
 
-static inline bool translate(Rv64SysHartState *h, uint64_t vaddr, MemAccess acc, uint64_t *paddr) {
+// Translate an access of size bytes (not crossing a page) and check it against PMP. *page_ok is set when PMP
+// allows the access's kind on the whole physical page, so it may be cached in an L1 TLB.
+static inline bool translate(Rv64SysHartState *h, uint64_t vaddr, MemAccess acc, uint32_t size, uint64_t *paddr,
+    bool *page_ok) {
     uint32_t eff_priv = h->priv; // loads/stores honor MPRV (use mstatus.MPP); fetches use current priv
     if ((acc != MemAccess::Fetch) && (h->mstatus & MSTATUS_MPRV)) {
         eff_priv = (h->mstatus & MSTATUS_MPP) >> MSTATUS_MPP_SHIFT;
@@ -1273,9 +1434,19 @@ static inline bool translate(Rv64SysHartState *h, uint64_t vaddr, MemAccess acc,
     uint32_t mode = (h->satp >> SATP_MODE_SHIFT) & 15;
     if ((eff_priv == PRIV_M) || (mode == SATP_MODE_BARE)) {
         *paddr = vaddr;
+        *page_ok = false; // only fetches cache a page here (the L1 ITLB)
+        if (acc == MemAccess::Fetch) {
+            *page_ok = ((eff_priv == PRIV_M) && (h->pmp_nrules == 0)) ||
+                       pmp_ok(h, vaddr & ~0xFFFull, 4096, acc, eff_priv);
+        }
+        if (!*page_ok && !((eff_priv == PRIV_M) && h->pmp_m_fast && ((vaddr & 7) + size <= 8)) &&
+            !pmp_ok(h, vaddr, size, acc, eff_priv)) {
+            rv64_sys_raise(h, access_fault_cause(acc), vaddr);
+            return false;
+        }
         return true;
     }
-    return translate_slow(h, vaddr, acc, eff_priv, vaddr >> 12, paddr);
+    return translate_slow(h, vaddr, acc, size, eff_priv, vaddr >> 12, paddr, page_ok);
 }
 
 // Record the LR reservation's physical address and evict its page from every hart's store DTLB
@@ -1285,7 +1456,8 @@ void rv64_sys_lr_reserve(Rv64SysHartState *h, uint64_t vaddr, uint32_t size) {
         return; // single hart: the SC value-check suffices; no cross-hart coherency needed
     }
     uint64_t paddr;
-    if (!translate(h, vaddr, MemAccess::Load, &paddr)) { // cannot fault here; defensive
+    bool page_ok;
+    if (!translate(h, vaddr, MemAccess::Load, size, &paddr, &page_ok)) { // cannot fault here; defensive
         TTSIM_ERROR(AssertionFailure, "unexpected fault");
     }
     h->reservation_paddr = paddr;
@@ -1341,7 +1513,8 @@ bool rv64_sys_load(Rv64SysHartState *h, uint64_t vaddr, void *dst, uint32_t size
         return rv64_load_crossing(h, vaddr, (uint8_t *)dst, size);
     }
     uint64_t paddr;
-    if (!translate(h, vaddr, MemAccess::Load, &paddr)) [[unlikely]] {
+    bool page_ok;
+    if (!translate(h, vaddr, MemAccess::Load, size, &paddr, &page_ok)) [[unlikely]] {
         return false;
     }
     RvSystem *p_sys = h->p_sys;
@@ -1360,7 +1533,8 @@ bool rv64_sys_store(Rv64SysHartState *h, uint64_t vaddr, const void *src, uint32
         return rv64_store_crossing(h, vaddr, (const uint8_t *)src, size);
     }
     uint64_t paddr;
-    if (!translate(h, vaddr, MemAccess::Store, &paddr)) [[unlikely]] {
+    bool page_ok;
+    if (!translate(h, vaddr, MemAccess::Store, size, &paddr, &page_ok)) [[unlikely]] {
         return false;
     }
     RvSystem *p_sys = h->p_sys;
@@ -1380,7 +1554,8 @@ bool rv64_sys_store(Rv64SysHartState *h, uint64_t vaddr, const void *src, uint32
 
 bool rv64_sys_atomic_dram(Rv64SysHartState *h, uint64_t vaddr, uint32_t size, bool is_load) {
     uint64_t paddr;
-    if (!translate(h, vaddr, is_load ? MemAccess::Load : MemAccess::Store, &paddr)) [[unlikely]] {
+    bool page_ok;
+    if (!translate(h, vaddr, is_load ? MemAccess::Load : MemAccess::Store, size, &paddr, &page_ok)) [[unlikely]] {
         return false; // trap already set
     }
     if (!in_dram(h->p_sys, paddr, size)) [[unlikely]] {
@@ -1411,7 +1586,9 @@ uint64_t rv64_sys_read_csr(Rv64SysHartState *h, uint32_t csr, bool *ok) {
         case CSR_MEDELEG: return h->medeleg;
         case CSR_MIDELEG: return h->mideleg;
         case CSR_MIE: return h->mie;
-        case CSR_MIP: return h->mip;
+        case CSR_MIP:
+            clint_refresh_irq(h); // MTIP follows mtime >= mtimecmp even while nothing would deliver it
+            return h->mip;
         case CSR_MTVEC: return h->mtvec;
         case CSR_MSCRATCH: return h->mscratch;
         case CSR_MEPC: return h->mepc;
@@ -1434,19 +1611,25 @@ uint64_t rv64_sys_read_csr(Rv64SysHartState *h, uint32_t csr, bool *ok) {
         case CSR_SCOUNTEREN: return h->scounteren;
         case CSR_SENVCFG: return h->senvcfg;
         case CSR_TIME: return mtime_now(h->p_sys);
-        case CSR_CYCLE: case CSR_INSTRET: return h->p_sys->visible_icount - h->p_sys->cause12_count;
+        case CSR_CYCLE: return h->p_sys->visible_icount - h->p_sys->cause12_count;
+        case CSR_INSTRET: return h->p_sys->visible_icount - h->p_sys->cause12_count - h->p_sys->ecall_ebreak_count;
         case CSR_FFLAGS: return h->fcsr & 0x1F;
         case CSR_FRM: return (h->fcsr >> 5) & 7;
         case CSR_FCSR: return h->fcsr & 0xFF;
-        case CSR_PMPCFG0: return h->pmpcfg[0];
-        case CSR_PMPCFG0 + 2: return h->pmpcfg[1];
+        case CSR_PMPCFG0: case CSR_PMPCFG0 + 2: {
+            uint64_t v = 0;
+            for (uint32_t i = 0; i < 8; i++) {
+                v |= uint64_t(h->pmpcfg[(csr - CSR_PMPCFG0) * 4 + i]) << (8 * i);
+            }
+            return v;
+        }
+        case CSR_PMPCFG0 + 4: case CSR_PMPCFG0 + 6: case CSR_PMPCFG0 + 8: case CSR_PMPCFG0 + 10:
+        case CSR_PMPCFG0 + 12: case CSR_PMPCFG0 + 14:
+            return 0; // entries 16-63 aren't implemented: read-only zero
         default:
             if ((csr >= CSR_PMPADDR0) && (csr <= CSR_PMPADDR0 + 63)) {
                 uint32_t idx = csr - CSR_PMPADDR0;
-                return (idx < 16) ? h->pmpaddr[idx] : 0;
-            }
-            if ((csr >= 0x3A0) && (csr <= 0x3AE) && !(csr & 1)) {
-                return 0; // pmpcfg4..14 WARL-zero
+                return (idx < PMP_N) ? h->pmpaddr[idx] : 0;
             }
             if ((csr >= 0xB03) && (csr <= 0xB12)) {
                 return h->mhpmcounter[csr - 0xB00];
@@ -1512,12 +1695,14 @@ void rv64_sys_write_csr(Rv64SysHartState *h, uint32_t csr, uint64_t val, bool *o
                 "menvcfg write sets reserved/unimplemented bits: 0x%llx", val);
             h->menvcfg = val;
             break;
-        case CSR_SSTATUS:
-            h->mstatus = (h->mstatus & ~SSTATUS_MASK) | (val & SSTATUS_MASK);
+        case CSR_SSTATUS: { // XS, UXL and SD read through sstatus but aren't writable
+            const uint64_t w = SSTATUS_MASK & ~(MSTATUS_XS | MSTATUS_UXL | MSTATUS_SD);
+            h->mstatus = (h->mstatus & ~w) | (val & w);
             rv64_normalize_mstatus(&h->mstatus);
             irq_recompute_deliverable(h);
             tlb_flush_l1(h);
             break;
+        }
         case CSR_SIE:
             h->mie = (h->mie & ~h->mideleg) | (val & h->mideleg);
             irq_recompute_deliverable(h);
@@ -1547,9 +1732,34 @@ void rv64_sys_write_csr(Rv64SysHartState *h, uint32_t csr, uint64_t val, bool *o
         case CSR_FFLAGS: h->fcsr = (h->fcsr & ~0x1F) | (val & 0x1F); rv64_fpu_mark_dirty(h); break;
         case CSR_FRM: h->fcsr = (h->fcsr & 0x1F) | ((val & 7) << 5); rv64_fpu_mark_dirty(h); break;
         case CSR_FCSR: h->fcsr = val & 0xFF; rv64_fpu_mark_dirty(h); break;
-        case CSR_PMPCFG0: h->pmpcfg[0] = val; break;
-        case CSR_PMPADDR0 ... CSR_PMPADDR0 + 15: h->pmpaddr[csr - CSR_PMPADDR0] = val; break;
-        case CSR_PMPADDR0 + 16 ... CSR_PMPADDR0 + 63: break; // WARL for OpenSBI probing
+        case CSR_PMPCFG0: case CSR_PMPCFG0 + 2:
+            for (uint32_t i = 0; i < 8; i++) {
+                uint32_t e = (csr - CSR_PMPCFG0) * 4 + i;
+                if (h->pmpcfg[e] & PMP_L) {
+                    continue; // a locked entry ignores writes until reset
+                }
+                uint32_t cfg = (val >> (8 * i)) & (PMP_R | PMP_W | PMP_X | PMP_A | PMP_L);
+                if (!(cfg & PMP_R)) {
+                    cfg &= ~PMP_W; // R=0 W=1 is reserved: WARL to W=0, as spike does
+                }
+                h->pmpcfg[e] = uint8_t(cfg);
+            }
+            pmp_update(h);
+            break;
+        case CSR_PMPADDR0 ... CSR_PMPADDR0 + PMP_N - 1: {
+            uint32_t e = csr - CSR_PMPADDR0;
+            if ((h->pmpcfg[e] & PMP_L) ||
+                ((e + 1 < PMP_N) && (h->pmpcfg[e + 1] & PMP_L) && ((h->pmpcfg[e + 1] & PMP_A) == PMP_A_TOR))) {
+                break; // locked, or the base of a locked TOR entry
+            }
+            h->pmpaddr[e] = val & PMPADDR_MASK;
+            pmp_update(h);
+            break;
+        }
+        case CSR_PMPCFG0 + 4: case CSR_PMPCFG0 + 6: case CSR_PMPCFG0 + 8: case CSR_PMPCFG0 + 10:
+        case CSR_PMPCFG0 + 12: case CSR_PMPCFG0 + 14:
+        case CSR_PMPADDR0 + PMP_N ... CSR_PMPADDR0 + 63:
+            break; // entries 16-63 aren't implemented: read-only zero
         case 0xB03 ... 0xB12: h->mhpmcounter[csr - 0xB00] = val; break;
         case 0x323 ... 0x332: h->mhpmevent[csr - 0x320] = val; break;
         case 0xB13 ... 0xB1F: case 0x333 ... 0x33F: break; // counters 19-31 are read-only zero
@@ -1561,6 +1771,7 @@ void rv64_sys_write_csr(Rv64SysHartState *h, uint32_t csr, uint64_t val, bool *o
 
 void rv64_sys_raise(Rv64SysHartState *h, uint64_t cause, uint64_t tval) {
     if ((cause == EXC_BREAKPOINT) || (cause == 8) || (cause == 9) || (cause == 11)) {
+        h->p_sys->ecall_ebreak_count++; // still counted for cycle and mtime, as before
         uint64_t pc = current_insn_pc(h);
         uint64_t npc = pc;
         [[maybe_unused]] int old_prv = h->priv;
@@ -1662,9 +1873,13 @@ static void irq_reschedule(Rv64SysHartState *p_hart) {
     p_hart->steps_left = 0;
 }
 
-static uint8_t *translate_host_cached(Rv64SysHartState *p_hart, uint64_t vaddr, MemAccess acc, uint64_t *pa_out) {
+// Fill the ITLB for a fetch at vaddr: the instruction's first halfword, or (second_half) the second halfword of
+// one that crosses into vaddr's page. When PMP doesn't allow fetches from the whole page, the entry serves just
+// this instruction (itlb_once), whose bytes are checked here.
+static uint8_t *translate_host_cached(Rv64SysHartState *p_hart, uint64_t vaddr, bool second_half, uint64_t *pa_out) {
     uint64_t pa;
-    if (!translate(p_hart, vaddr, acc, &pa)) {
+    bool page_ok;
+    if (!translate(p_hart, vaddr, MemAccess::Fetch, 2, &pa, &page_ok)) {
         *pa_out = 0;
         return nullptr; // fault raised
     }
@@ -1677,9 +1892,23 @@ static uint8_t *translate_host_cached(Rv64SysHartState *p_hart, uint64_t vaddr, 
     } else if ((pa >= rv64_sys_reset_rom_base()) && (pa < rv64_sys_reset_rom_base() + RESET_ROM_SIZE)) {
         host = p_sys->reset_rom + (page - rv64_sys_reset_rom_base());
     }
-    if (!host) {
+    if (!host) { // devices and unmapped space aren't executable
         p_hart->itlb[0].vpn = ~uint64_t(0);
+        rv64_sys_raise(p_hart, EXC_INST_ACCESS, vaddr);
+        *pa_out = 0;
         return nullptr;
+    }
+    if (!page_ok) [[unlikely]] {
+        uint32_t off = uint32_t(vaddr) & 0xFFF;
+        if (!second_half && (off != 0xFFE) && ((mem_rd<uint16_t>(host + off) & 3) == 3) &&
+            !pmp_ok(p_hart, pa + 2, 2, MemAccess::Fetch, p_hart->priv)) {
+            p_hart->itlb[0].vpn = ~uint64_t(0);
+            rv64_sys_raise(p_hart, EXC_INST_ACCESS, vaddr + 2);
+            *pa_out = 0;
+            return nullptr;
+        }
+        p_hart->itlb_once = true;
+        p_hart->steps_left = 0;
     }
     p_hart->itlb[0].vpn = vaddr >> 12;
     p_hart->itlb[0].host_page = host;
@@ -1736,7 +1965,7 @@ static void fault(Rv64SysHartState *p_hart, uint64_t cause, uint64_t tval) {
     p_hart->trap_pending = true;
     p_hart->trap_pc = fault_pc;
     p_hart->trap_npc = npc;
-    if (cause != EXC_INST_PAGE_FAULT) { // for anything other than an instruction fetch fault...
+    if ((cause != EXC_INST_PAGE_FAULT) && (cause != EXC_INST_ACCESS)) { // for anything but an instruction fetch fault...
         g_sys.visible_icount--; // cancel out the later increment
     }
     p_hart->steps_left = 0;
@@ -1949,9 +2178,9 @@ void rv64_sys_run(RvSystem *p_sys, uint64_t max_insns) {
             auto *p_itlb = &p_hart->itlb[0];
             if (p_itlb->vpn != fetch_vpn) [[unlikely]] {
                 uint64_t pa = 0;
-                uint8_t *p = translate_host_cached(p_hart, p_hart->pc, MemAccess::Fetch, &pa);
+                uint8_t *p = translate_host_cached(p_hart, p_hart->pc, false, &pa);
                 if (!p) [[unlikely]] {
-                    TTSIM_VERIFY(p_hart->trap_pending, AssertionFailure, "ifetch mmio: pa=0x%lx", pa);
+                    TTSIM_VERIFY(p_hart->trap_pending, AssertionFailure, "fetch failed without a fault: pa=0x%lx", pa);
                     break;
                 }
             }
@@ -1959,9 +2188,9 @@ void rv64_sys_run(RvSystem *p_sys, uint64_t max_insns) {
             uint32_t raw = mem_rd<uint32_t>(p_itlb->host_page + fetch_off);
             if ((fetch_off == 0xFFE) && ((raw & 3) == 3)) [[unlikely]] {
                 uint64_t pa = 0;
-                uint8_t *p = translate_host_cached(p_hart, p_hart->pc + 2, MemAccess::Fetch, &pa);
+                uint8_t *p = translate_host_cached(p_hart, p_hart->pc + 2, true, &pa);
                 if (!p) [[unlikely]] {
-                    TTSIM_VERIFY(p_hart->trap_pending, AssertionFailure, "ifetch mmio: pa=0x%lx", pa);
+                    TTSIM_VERIFY(p_hart->trap_pending, AssertionFailure, "fetch failed without a fault: pa=0x%lx", pa);
                     break;
                 }
                 uint16_t hw1 = mem_rd<uint16_t>(p_itlb->host_page);
@@ -1987,6 +2216,10 @@ void rv64_sys_run(RvSystem *p_sys, uint64_t max_insns) {
                 ((g_sys.insn_count % g_sys.hart_quantum) == 0)) [[unlikely]] {
                 scheduler_request_yield(p_hart);
             }
+        }
+        if (p_hart->itlb_once) [[unlikely]] { // the ITLB entry was for one instruction only
+            p_hart->itlb_once = false;
+            p_hart->itlb[0].vpn = ~uint64_t(0);
         }
         if (p_hart->trap_pending) [[unlikely]] {
             TTSIM_VERIFY(!p_hart->wfi_retired, AssertionFailure, "should not have WFI retired with trap pending");
