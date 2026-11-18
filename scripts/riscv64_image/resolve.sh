@@ -93,7 +93,9 @@ apt_env firmware riscv64 "$PORTS" "resolute" "main universe"
 # The tool container: the tools' packages from the same snapshot, installed into ubuntu:noble with no network
 # (apt orders the local .debs by their dependencies). The closure was resolved against an empty status, so it
 # includes base packages (libc6, dpkg, ...) at the snapshot's versions, older than today's ubuntu:noble: allow the
-# downgrades, so the container's packages are exactly the snapshot's.
+# downgrades, so the container's packages are exactly the snapshot's. apt runs as root throughout: by default it
+# drops to the _apt user for its fetch methods, which fails under rootless podman without subuid/subgid ranges
+# (only uid 0 is mapped), and there is no network to sandbox anyway.
 apt_env tools amd64 "https://snapshot.ubuntu.com/ubuntu/$S" "noble noble-updates noble-security" "main universe"
 aptg tools -y --download-only install python3 e2fsprogs zstd device-tree-compiler > "$W/tools.log" 2>&1 ||
     fail "resolve the tool packages" "$W/tools.log"
@@ -102,7 +104,8 @@ podman pull -q docker.io/library/ubuntu:noble > "$W/pull.log" 2>&1 || fail "podm
 BASE="$(podman image inspect --format '{{.Digest}}' docker.io/library/ubuntu:noble)"
 podman rm -f "$T" > /dev/null 2>&1
 podman run --name "$T" --network=none -v "$W/tools/cache/archives:/debs:ro" docker.io/library/ubuntu:noble \
-    sh -c 'apt-get install -y --allow-downgrades --no-install-recommends /debs/*.deb && dpkg-query -W > /tool-packages' \
+    sh -c 'apt-get -o APT::Sandbox::User=root install -y --allow-downgrades --no-install-recommends /debs/*.deb &&
+        dpkg-query -W > /tool-packages' \
     > "$W/podman.log" 2>&1 ||
     fail "install the tools in the container" "$W/podman.log"
 podman export -o "$D/$T.tar" "$T" || fail "podman export"

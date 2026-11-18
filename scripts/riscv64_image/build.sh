@@ -16,7 +16,7 @@
 # Writes <out-dir>/: Image, fw_dynamic.bin, fw_dynamic.elf, fw_jump.bin, fw_jump.elf,
 # ubuntu-riscv64-minimal.img (4 GiB ext4), rootfs.tar (the image's tree), rootfs.list (its canonical listing),
 # SHA256SUMS, and stage2.log (the guest console). There is no initrd: the kernel mounts root=/dev/vda itself.
-# Prints "build: DONE" or "build: FAILED: <step>". About 45 minutes on a loaded 32-core machine, most of it
+# Prints "build: DONE" or "build: FAILED: <step>". About 45-60 minutes on a 32-core machine, most of it
 # stage 2 (dpkg in the guest).
 
 set -eu
