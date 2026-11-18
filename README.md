@@ -158,7 +158,7 @@ qemu-system-x86_64 ... \
     -device ttsim,lib=/path/to/libttsim.so,bar0-size=4G,bar4-size=512G
 ```
 
-A multi-chip `libttsim.so` (e.g. `wh_x32`/`bh_x32`, or the 4-MMIO `wh_x8`) presents several
+A multi-chip `libttsim.so` such as the 4-MMIO `wh_x8` presents several
 host-visible chips through the one process-wide library. Add one `-device ttsim` per MMIO chip,
 all pointing at the same library and using the BAR sizes for the chip (Wormhole shown); each
 surfaces as its own PCI device and, in the guest, its own `/dev/tenstorrent/N`. Devices auto-assign
