@@ -32,7 +32,7 @@ console you started. Don't boot it anywhere with a network.
 To resolve (once, on a networked host):
 - Ubuntu with `apt-get` and the Ubuntu archive keyring (`ubuntu-keyring`, which provides
   `/usr/share/keyrings/ubuntu-archive-keyring.gpg`);
-- podman (rootless is fine);
+- podman (rootless is fine, with or without subuid/subgid ranges);
 - about 1 GB of downloads.
 
 To build (offline, any x86_64 Linux host):
@@ -41,7 +41,7 @@ To build (offline, any x86_64 Linux host):
   `--fw-dynamic-next` and because earlier releases let guest code access memory outside the simulated machine
   through device accesses, and stage 2 runs every package's maintainer scripts as guest code;
 - this tree's `data/riscv64/minimal.dts`;
-- about 15 GB of free disk and 45 minutes or so. Stage 2 is most of it, and it runs on one core.
+- about 15 GB of free disk and 45-60 minutes or so. Stage 2 is most of it, and it runs on one core.
 
 ## Step 1: resolve the inputs
 
