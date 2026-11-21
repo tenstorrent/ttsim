@@ -33,4 +33,4 @@ jobs:
 
     - name: Hash Build Outputs
       run: |
-        sha256sum src/_out/{debug,release}_{wh,bh}/libttsim.so
+        sha256sum src/_out/*/libttsim.so src/_out/*_riscv64/ttsim
