@@ -15,7 +15,6 @@ struct RvSystem; // the board (DRAM + devices), defined in rv64_system.cpp
 #define DTLB_N 16u
 #define L2TLB_N 128u
 #define TLB_VALID_BIT (1ull << 63)
-#define TLB_INVALID_VPN UINT64_MAX
 
 struct TlbEntry {
     uint64_t vpn;
@@ -71,7 +70,6 @@ struct Rv64SysHartState {
     uint64_t mcounteren;
     uint64_t mcountinhibit;
     uint64_t menvcfg;
-    uint64_t sstatus_extra; // unused bits kept in mstatus; sstatus is a view of mstatus
     uint64_t stvec;
     uint64_t sscratch;
     uint64_t sepc;
@@ -80,7 +78,6 @@ struct Rv64SysHartState {
     uint64_t satp;
     uint64_t scounteren;
     uint64_t senvcfg;
-    uint64_t sie_unused; // sie/sip are views of mie/mip masked by mideleg
     uint32_t fcsr;
     uint8_t pmpcfg[PMP_N];
     uint64_t pmpaddr[PMP_N];
@@ -93,13 +90,9 @@ struct Rv64SysHartState {
     uint64_t reservation_value;
     uint64_t reservation_paddr;
 
-    bool wfi;
     bool wfi_retired;
     bool wfi_sleeping;
     bool trap_pending;
-    uint64_t trap_cause;
-    uint64_t trap_tval;
-    uint64_t trap_pc;
     uint64_t trap_npc;
     uint64_t pc_adjust;
     uint64_t irq_deliverable;
@@ -167,7 +160,6 @@ void rv64_sys_run(RvSystem *p_sys, uint64_t max_insns);
 void rv64_sys_set_disk(RvSystem *p_sys, const char *path, bool persist);
 void rv64_sys_set_irq(RvSystem *p_sys, uint32_t source, bool level);
 void rv64_sys_set_interactive(RvSystem *p_sys);
-void rv64_sys_set_hart_quantum(RvSystem *p_sys, uint32_t q);
 void rv64_sys_uart_inject(RvSystem *p_sys, uint64_t at, const uint8_t *data, size_t len);
 void rv64_sys_uart_stop(RvSystem *p_sys, const char *text);
 void rv64_sys_tt_attach(RvSystem *p_sys, const char *path);

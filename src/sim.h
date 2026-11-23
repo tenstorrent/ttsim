@@ -38,7 +38,7 @@ struct Rv64HartState {
     uint64_t mtvec;
     uint64_t mepc;
     uint64_t mcause;
-    bool rocc_irq; // mstatus.MIE && mie's RoCC bit && a pending bit in one of its buffers
+    bool irq; // mstatus.MIE && an interrupt mie enables is pending
 
     uint8_t *p_sram;
     uint32_t sram_size;
@@ -51,6 +51,11 @@ struct Rv64HartState {
 #define SRC_ROWS 64
 #define SRC_RWC_ROWS SRC_ROWS
 #define DST_ROWS 1024
+#if TT_ARCH_VERSION == 0
+#define DST_RWC_ROWS 4096 // WH: dst_rwc and dst_rwc_cr are 12 bits; a Dest row address uses the low 10
+#else
+#define DST_RWC_ROWS DST_ROWS
+#endif
 #define ROW_SIZE 16
 #define CC_STACK_SIZE 8
 #define ADC_X_MASK 0x3FFFF // 18 bits
@@ -81,8 +86,6 @@ struct Rv64HartState {
 #define NONTENSIX_COL_MASK 0x301
 #define NONTENSIX_ROW_MASK 0x03
 #endif
-#define TENSIX_COL_MASK (((1ul << NUM_TILE_COLS) - 1) & ~NONTENSIX_COL_MASK)
-#define TENSIX_ROW_MASK (((1ul << NUM_TILE_ROWS) - 1) & ~NONTENSIX_ROW_MASK)
 
 struct TensixThreadState {
 #define THREAD_CFG_REG_UNION(i) THREAD_CFG##i##_REG_UNION()
@@ -163,6 +166,7 @@ struct TensixConfigState {
     CFG25_REG_UNION()
     CFG28_REG_UNION()
     CFG36_REG_UNION()
+    CFG40_REG_UNION()
     CFG50_REG_UNION()
     CFG56_REG_UNION()
     CFG57_REG_UNION()
@@ -224,6 +228,10 @@ struct TensixMopState {
     uint32_t step;
 };
 
+// Where an instruction FIFO entry came from: the last (or only) instruction of a push, or one a MOP or a REPLAY expanded
+// with more of its expansion to follow
+enum InstOrigin : uint8_t { INST_PUSH, INST_MOP, INST_REPLAY };
+
 struct TensixState {
     uint32_t tile_id;
     uint32_t tensix_id;
@@ -232,6 +240,8 @@ struct TensixState {
     uint32_t inst[TENSIX_INST_PIPES][TENSIX_INST_FIFO_SIZE];
     uint32_t inst_rd_ptr[TENSIX_INST_PIPES];
     uint32_t inst_wr_ptr[TENSIX_INST_PIPES];
+    uint8_t inst_origin[TENSIX_INST_PIPES][TENSIX_INST_FIFO_SIZE]; // InstOrigin of each entry
+    uint32_t inst_origin_count[TENSIX_INST_PIPES][3]; // entries in the FIFO by InstOrigin
 
     uint16_t mop_zmask_hi16[TENSIX_INST_PIPES];
     uint32_t mop_cfg[TENSIX_INST_PIPES][9];
@@ -261,6 +271,7 @@ struct TensixState {
     uint16_t dst[DST_ROWS][ROW_SIZE];
     bool dst_row_valid[DST_ROWS]; // would be nice to make this a bitmask, but this is easier for bringup
     uint32_t src_a_valid, src_a_unpack_bank, src_a_matrix_bank;
+    bool src_a_wr_to_dst; // whether unpacker 0's last UNPACR wrote Dst rather than SrcA
     uint32_t src_b_valid, src_b_unpack_bank, src_b_matrix_bank;
     // [SrcA/SrcB], a bit per bank: banks the Matrix Unit has waited for since it got them, banks an unpacker wrote (per
     // issuing thread, until it waits for that unpacker) since the Matrix Unit last released them, and banks a move
@@ -281,11 +292,8 @@ struct TensixState {
     uint32_t bias[TENSIX_INST_PIPES];
     uint32_t fidelity[TENSIX_INST_PIPES];
     uint32_t l_regs[16][32]; // only 8 fully usable regs, but 16 sources easier to implement this way
-    uint32_t lane_config;
+    uint32_t lane_config[8]; // LaneConfig of each SFPU instance; lane l is in instance l & 7
     uint32_t prng_state[32];
-    uint32_t load_macro_instruction_template[4];
-    uint32_t load_macro_sequence[4];
-    uint32_t load_macro_misc;
     bool cc_en;
     uint32_t cc;
     bool cc_en_stack[CC_STACK_SIZE];
@@ -451,16 +459,7 @@ struct EthTile {
     uint32_t eth_txq_transfer_size_bytes[ETH_NUM_TX_RX_QUEUES];
     uint32_t eth_txq_dest_addr[ETH_NUM_TX_RX_QUEUES];
     uint32_t eth_txq_remote_reg_data[ETH_NUM_TX_RX_QUEUES];
-#if TT_ARCH_VERSION == 0
-    uint32_t eth_txq_dest_mac_addr_hi[ETH_NUM_TX_RX_QUEUES];
-    uint32_t eth_txq_dest_mac_addr_lo[ETH_NUM_TX_RX_QUEUES];
-#endif
 #if TT_ARCH_VERSION == 1
-    uint32_t eth_txq_txpkt_cfg_sel_sw[ETH_NUM_TX_RX_QUEUES];
-    uint32_t eth_txq_txpkt_cfg_sel_hw[ETH_NUM_TX_RX_QUEUES];
-    uint32_t eth_txpkt_cfg_mac_da_lo[ETH_NUM_TX_HEADER_TABLE_ENTRIES];
-    uint32_t eth_txpkt_cfg_mac_da_hi[ETH_NUM_TX_HEADER_TABLE_ENTRIES];
-    uint32_t eth_mac_rx_routing;
     uint32_t eth_mac_rx_addr_routing;
 #endif
     uint32_t eth_rxq_control[ETH_NUM_TX_RX_QUEUES];
@@ -663,13 +662,3 @@ std::pair<bool, uint64_t> tile_mmio_rd64(char tile_type, uint32_t tile_id, uint3
 [[nodiscard]] bool tile_mmio_wr64(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_t addr, uint64_t data);
 void tile_rd_bytes(uint32_t coord, uint64_t addr, void *p, uint32_t size);
 void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size);
-
-template<class T> inline T tile_rd(uint32_t coord, uint64_t addr) {
-    T data;
-    tile_rd_bytes(coord, addr, &data, sizeof(data));
-    return data;
-}
-
-template<class T> inline void tile_wr(uint32_t coord, uint64_t addr, T data) {
-    tile_wr_bytes(coord, addr, &data, sizeof(data));
-}

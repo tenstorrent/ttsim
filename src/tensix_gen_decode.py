@@ -46,9 +46,9 @@ def main():
             f.write(f'    static bool tensix_decode_{name.lower()}(TensixState *p_tensix, uint32_t pipe, uint32_t inst) {{ \\\n')
             if unused_arg_bits:
                 if args.chip in {'wh', 'bh'}:
-                    f.write(f'        TTSIM_VERIFY(!(inst & 0x{unused_arg_bits:06X}), UndefinedBehavior, "invalid opcode bits set in inst=0x%x", inst); \\\n')
+                    f.write(f'        TTSIM_VERIFY(!(inst & 0x{unused_arg_bits:06X}), UnsupportedFunctionality, "invalid opcode bits set in inst=0x%x", inst); \\\n')
                 else:
-                    f.write(f'        TTSIM_VERIFY(!(inst & 0x{unused_arg_bits:06X}), UnimplementedFunctionality, "inst=0x%x", inst); \\\n')
+                    f.write(f'        TTSIM_VERIFY(!(inst & 0x{unused_arg_bits:06X}), UnsupportedFunctionality, "inst=0x%x", inst); \\\n')
             arg_list = ['p_tensix', 'pipe']
             for (arg_name, bits) in info['args'].items():
                 (hi, lo) = tuple(int(x) for x in bits.split(':'))

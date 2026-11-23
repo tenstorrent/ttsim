@@ -195,13 +195,13 @@ void libttsim_pci_dma_mem_wr_bytes(uint64_t paddr, const void *p, uint32_t size)
     fpenv_write(DEFAULT_FPENV);
 }
 
-// transitional; to be removed once the PCIe/BAR path is in place everywhere (see docs/libttsim_api.md)
+// transitional: tt-umd still uses these where they are legal (see docs/libttsim_api.md)
 extern "C" API_EXPORT void libttsim_tile_rd_bytes(uint32_t x, uint32_t y, uint64_t addr, void *p, uint32_t size) {
     FpEnvGuard fpenv_guard;
     TTSIM_ERROR_NOFMT(UnsupportedFunctionality);
 }
 
-// transitional; to be removed once the PCIe/BAR path is in place everywhere (see docs/libttsim_api.md)
+// transitional: tt-umd still uses these where they are legal (see docs/libttsim_api.md)
 extern "C" API_EXPORT void libttsim_tile_wr_bytes(uint32_t x, uint32_t y, uint64_t addr, const void *p, uint32_t size) {
     FpEnvGuard fpenv_guard;
     TTSIM_ERROR_NOFMT(UnsupportedFunctionality);
@@ -268,6 +268,7 @@ static void clock_current_chip() {
                         uint32_t inst = p_tensix->inst[pipe][inst_rd_ptr];
                         if (tensix_decode_and_execute(p_tensix, pipe, inst)) {
                             any_tensix = true;
+                            p_tensix->inst_origin_count[pipe][p_tensix->inst_origin[pipe][inst_rd_ptr]]--;
                             inst_rd_ptr = (inst_rd_ptr + 1) % TENSIX_INST_FIFO_SIZE;
                             p_tensix->inst_rd_ptr[pipe] = inst_rd_ptr;
                             if (inst_rd_ptr == p_tensix->inst_wr_ptr[pipe]) {

@@ -44,8 +44,6 @@
 #define ARC_BAR0_APB_BASE 0x1FF00000
 #define ARC_BAR0_APB_LIMIT 0x1FFFFFFF
 #define ARC_COORD (0 | (10 << 6))
-#define ARC_NOC_CSM_BASE 0x810000000ull
-#define ARC_NOC_APB_BASE 0x880000000ull
 #define IATU_BASE 0x1200ull
 #define IATU_LIMIT 0x31FFull
 #define IATU_SUPPORTED_INBOUND_CTRL_2 0xC8000400u
@@ -73,7 +71,7 @@
 
 static void verify_iatu_region_write(uint32_t offset, uint32_t value) {
     uint32_t slot = offset / 0x100;
-    TTSIM_VERIFY(slot < 32, AssertionFailure, "bar2: iATU offset=0x%x", offset);
+    TTSIM_ASSERT(slot < 32, "bar2: iATU offset=0x%x", offset);
     bool inbound = slot & 1;
     uint32_t region = slot >> 1;
     uint32_t reg = offset % 0x100;
@@ -135,7 +133,7 @@ static void verify_iatu_region_write(uint32_t offset, uint32_t value) {
 
 static uint32_t *iatu_reg_field(uint32_t offset) {
     uint32_t slot = offset / 0x100;
-    TTSIM_VERIFY(slot < 32, AssertionFailure, "bar2: iATU offset=0x%x", offset);
+    TTSIM_ASSERT(slot < 32, "bar2: iATU offset=0x%x", offset);
     uint32_t reg = offset % 0x100;
     IatuRegion *r = (slot & 1) ? &g_p_tile.iatu_inbound[slot >> 1] : &g_p_tile.iatu_outbound[slot >> 1];
     switch (reg) {
@@ -247,7 +245,7 @@ static TlbTarget tlb_translate(uint32_t offset, uint32_t size) {
     uint32_t window_mask = (1 << window_bits) - 1;
     offset &= window_mask;
     uint32_t n_addr_bits = 36 - window_bits; // number of local_offset bits in TLB config
-    TTSIM_VERIFY(tlb_index < std::size(g_p_tile.tlb_cfg), AssertionFailure, "tlb_index=%d", tlb_index);
+    TTSIM_VERIFY(tlb_index < std::size(g_p_tile.tlb_cfg), UnsupportedFunctionality, "tlb_index=%d", tlb_index); // a DMA device address
     TTSIM_VERIFY(offset + size - 1 <= window_mask, UnsupportedFunctionality, "TLB region overrun: offset=0x%x size=%d", offset, size);
     uint64_t tlb_cfg = g_p_tile.tlb_cfg[tlb_index];
     uint64_t addr_bits = tlb_cfg & ((1ull << n_addr_bits) - 1);
@@ -267,7 +265,7 @@ static TlbTarget tlb_translate(uint32_t offset, uint32_t size) {
 #elif TT_ARCH_VERSION == 1
     uint32_t tlb_index = offset / 0x200000;
     offset &= 0x1FFFFF;
-    TTSIM_VERIFY(3 * tlb_index < std::size(g_p_tile.tlb_cfg), AssertionFailure, "tlb_index=%d", tlb_index);
+    TTSIM_VERIFY(tlb_index < 202, UnsupportedFunctionality, "tlb_index=%d", tlb_index); // a DMA device address past the 2 MiB windows
     TTSIM_VERIFY(offset + size - 1 <= 0x1FFFFF, UnsupportedFunctionality, "TLB region overrun: offset=0x%x size=%d", offset, size);
     uint32_t tlb_cfg0 = g_p_tile.tlb_cfg[3*tlb_index + 0];
     uint32_t tlb_cfg1 = g_p_tile.tlb_cfg[3*tlb_index + 1];
@@ -300,7 +298,7 @@ static TlbTarget tlb_translate(uint32_t offset, uint32_t size) {
 static std::pair<uint32_t, uint64_t> tlb_translate_bar4(uint64_t offset, uint32_t size) {
     uint32_t tlb_index = 202 + uint32_t(offset >> 32);
     uint32_t window_offset = uint32_t(offset);
-    TTSIM_VERIFY(3 * tlb_index < std::size(g_p_tile.tlb_cfg), AssertionFailure, "tlb_index=%d", tlb_index);
+    TTSIM_ASSERT(3 * tlb_index < std::size(g_p_tile.tlb_cfg), "tlb_index=%d", tlb_index);
     TTSIM_VERIFY(uint64_t(window_offset) + size <= 0x100000000ull, UnsupportedFunctionality, "TLB region overrun: offset=0x%x size=%d", window_offset, size);
     uint32_t tlb_cfg0 = g_p_tile.tlb_cfg[3*tlb_index + 0];
     uint32_t tlb_cfg1 = g_p_tile.tlb_cfg[3*tlb_index + 1];
@@ -517,12 +515,12 @@ static void pcie_bar0_rd(uint32_t offset, void *p, uint32_t size) {
 #elif TT_ARCH_VERSION == 0
         case ARC_BAR0_CSM_BASE ... ARC_BAR0_CSM_LIMIT: {
             uint32_t csm_offset = offset - ARC_BAR0_CSM_BASE;
-            tile_rd_bytes(ARC_COORD, ARC_NOC_CSM_BASE + csm_offset, p, size);
+            tile_rd_bytes(ARC_COORD, ARC_NOC_XBAR_BASE + ARC_CSM_BASE + csm_offset, p, size);
             break;
         }
         case ARC_BAR0_APB_BASE ... ARC_BAR0_APB_LIMIT: {
             uint32_t apb_offset = offset - ARC_BAR0_APB_BASE;
-            tile_rd_bytes(ARC_COORD, ARC_NOC_APB_BASE + apb_offset, p, size);
+            tile_rd_bytes(ARC_COORD, ARC_NOC_XBAR_BASE + ARC_APB_BASE + apb_offset, p, size);
             break;
         }
 #endif
@@ -579,13 +577,13 @@ void pcie_mem_rd_bytes(uint64_t paddr, void *p, uint32_t size) {
 #if TT_ARCH_VERSION == 0
 static void tlb_cfg_wr64(uint32_t tlb_offset, uint64_t data) {
     uint32_t index = tlb_offset / 8;
-    TTSIM_VERIFY(index < std::size(g_p_tile.tlb_cfg), AssertionFailure, "index=%d", index);
+    TTSIM_ASSERT(index < std::size(g_p_tile.tlb_cfg), "index=%d", index);
     g_p_tile.tlb_cfg[index] = data;
 }
 
 static void tlb_cfg_wr32(uint32_t tlb_offset, uint32_t data) {
     uint32_t index = tlb_offset / 8;
-    TTSIM_VERIFY(index < std::size(g_p_tile.tlb_cfg), AssertionFailure, "index=%d", index);
+    TTSIM_ASSERT(index < std::size(g_p_tile.tlb_cfg), "index=%d", index);
     if (tlb_offset & 4) {
         g_p_tile.tlb_cfg[index] = (g_p_tile.tlb_cfg[index] & 0xFFFFFFFFull) | (uint64_t(data) << 32);
     } else {
@@ -594,7 +592,7 @@ static void tlb_cfg_wr32(uint32_t tlb_offset, uint32_t data) {
 }
 #elif TT_ARCH_VERSION == 1
 static void tlb_cfg_wr32(uint32_t index, uint32_t data) {
-    TTSIM_VERIFY(index < std::size(g_p_tile.tlb_cfg), AssertionFailure, "index=%d", index);
+    TTSIM_ASSERT(index < std::size(g_p_tile.tlb_cfg), "index=%d", index);
     g_p_tile.tlb_cfg[index] = data;
 }
 #endif
@@ -625,12 +623,12 @@ static void pcie_bar0_wr(uint32_t offset, const void *p, uint32_t size) {
         }
         case ARC_BAR0_CSM_BASE ... ARC_BAR0_CSM_LIMIT: {
             uint32_t csm_offset = offset - ARC_BAR0_CSM_BASE;
-            tile_wr_bytes(ARC_COORD, ARC_NOC_CSM_BASE + csm_offset, p, size);
+            tile_wr_bytes(ARC_COORD, ARC_NOC_XBAR_BASE + ARC_CSM_BASE + csm_offset, p, size);
             break;
         }
         case ARC_BAR0_APB_BASE ... ARC_BAR0_APB_LIMIT: {
             uint32_t apb_offset = offset - ARC_BAR0_APB_BASE;
-            tile_wr_bytes(ARC_COORD, ARC_NOC_APB_BASE + apb_offset, p, size);
+            tile_wr_bytes(ARC_COORD, ARC_NOC_XBAR_BASE + ARC_APB_BASE + apb_offset, p, size);
             break;
         }
 #elif TT_ARCH_VERSION == 1
@@ -638,6 +636,12 @@ static void pcie_bar0_wr(uint32_t offset, const void *p, uint32_t size) {
             TTSIM_VERIFY(!(offset & 3), UnsupportedFunctionality, "bar0: misaligned offset=0x%x", offset);
             TTSIM_VERIFY(size == 4, UnsupportedFunctionality, "bar0: offset=0x%x size=%d", offset, size);
             tlb_cfg_wr32((offset - 0x1FC00000) / 4, mem_rd<uint32_t>(p));
+            break;
+        case 0x1FC009D8 ... 0x1FC00A57: // strided[32]: non-rectangular multicast for TLBs 0-31; 0 = not strided
+            TTSIM_VERIFY(!(offset & 3), UnsupportedFunctionality, "bar0: misaligned offset=0x%x", offset);
+            TTSIM_VERIFY(size == 4, UnsupportedFunctionality, "bar0: offset=0x%x size=%d", offset, size);
+            TTSIM_VERIFY(!mem_rd<uint32_t>(p), UnimplementedFunctionality, "bar0: TLB %d strided=0x%x",
+                (offset - 0x1FC009D8) / 4, mem_rd<uint32_t>(p));
             break;
 #endif
         default:
@@ -705,6 +709,6 @@ void pcie_mem_wr_bytes(uint64_t paddr, const void *p, uint32_t size) {
         case 0: pcie_bar0_wr(offset, p, size); break;
         case 2: pcie_bar2_wr(offset, p, size); break;
         case 4: pcie_bar4_wr(offset, p, size); break;
-        default: TTSIM_ASSERT(!"invalid bar");
+        default: TTSIM_UNREACHABLE("bar=%u", bar);
     }
 }

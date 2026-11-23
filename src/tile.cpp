@@ -3,6 +3,7 @@
 
 // Per-tile infrastructure: tile init, NOC routing, TDMA, Ethernet, DRAM, debug/config registers.
 #include "sim.h"
+#include "riscv_defines.h"
 #include "topology.h"
 #include "eth_fw_blob.h" // generated
 
@@ -129,7 +130,7 @@ static uint32_t noc_translation_table_find(
             return logical_coord;
         }
     }
-    TTSIM_ERROR(AssertionFailure, "physical_coord=%d first=%d last=%d", physical_coord, first, last);
+    TTSIM_UNREACHABLE("physical_coord=%d first=%d last=%d", physical_coord, first, last);
 }
 
 template<char tile_type>
@@ -312,10 +313,7 @@ void e_tile_init(uint32_t tile_id) {
     p_tile->erisc_mac_1 = ETH_MAC_REGS_ERISC_MAC_1_RESET_VALUE;
     for (uint32_t i = 0; i < ETH_NUM_TX_RX_QUEUES; i++) {
         p_tile->eth_txq_control[i] = ETH_TXQ_CONTROL_RESET_VALUE;
-        p_tile->eth_txq_dest_mac_addr_hi[i] = 0;
     }
-    p_tile->eth_txq_dest_mac_addr_lo[0] = 0xAB;
-    p_tile->eth_txq_dest_mac_addr_lo[1] = 0xAA;
     wh_x2_eth_link_init(tile_id);
 #elif TT_ARCH_VERSION == 1
     uint32_t jmp_addr = 0x71574;
@@ -330,20 +328,9 @@ void e_tile_init(uint32_t tile_id) {
     // Queue 2 has zero values for all of the following registers
     p_tile->eth_txq_control[0] = ETH_TXQ_CONTROL_RESET_VALUE;
     p_tile->eth_txq_control[1] = ETH_TXQ_CONTROL_RESET_VALUE;
-    p_tile->eth_mac_rx_routing = 0;
     p_tile->eth_mac_rx_addr_routing = ETH_CTRL_REGS_MAC_RX_ADDR_ROUTING_RESET_VALUE;
-    // Broadcast MAC address
-    p_tile->eth_txpkt_cfg_mac_da_lo[0] = 0xFFFFFFFF;
-    p_tile->eth_txpkt_cfg_mac_da_hi[0] = 0xFFFF;
-    // Multicast MAC address
-    p_tile->eth_txpkt_cfg_mac_da_lo[1] = 1;
-    p_tile->eth_txpkt_cfg_mac_da_hi[1] = 0x100;
     p_tile->eth_rxq_control[0] = ETH_RXQ_CONTROL_RESET_VALUE;
     p_tile->eth_rxq_control[1] = ETH_RXQ_CONTROL_RESET_VALUE;
-    p_tile->eth_txq_txpkt_cfg_sel_sw[0] = 0;
-    p_tile->eth_txq_txpkt_cfg_sel_sw[1] = 0x111;
-    p_tile->eth_txq_txpkt_cfg_sel_hw[0] = 0;
-    p_tile->eth_txq_txpkt_cfg_sel_hw[1] = 1;
     mem_wr<uint32_t>(&p_tile->sram[0x7CC04], 2); // eth_status.port_status = PORT_DOWN (no link)
     mem_wr<uint32_t>(&p_tile->sram[0x7CC00], 0xC0DEA000); // eth_status.postcode = POSTCODE_ETH_INIT_PASS
     mem_wr<uint32_t>(&p_tile->sram[0x7CFBC], 0x010700); // eth_fw_ver = 1.7.0 {patch, minor, major}
@@ -452,7 +439,7 @@ static uint32_t chip_id_to_coord(uint32_t chip_id) {
             }
         }
     }
-    TTSIM_ERROR(AssertionFailure, "chip id has no matching coord %d", chip_id);
+    TTSIM_UNREACHABLE("chip id has no matching coord %d", chip_id);
 }
 
 static constexpr uint32_t ETH_FW_ROUTE_TABLE_ADDR = 0x14D00; // must match eth fw
@@ -723,7 +710,7 @@ static uint32_t tile_to_coord(char tile_type, uint32_t tile_id) {
 #endif
     } else
     {
-        TTSIM_ERROR(AssertionFailure, "tile_type=%c", tile_type);
+        TTSIM_UNREACHABLE("tile_type=%c", tile_type);
     }
 }
 
@@ -868,9 +855,10 @@ static std::pair<char, uint32_t> coord_to_tile(uint32_t coord) {
 }
 
 static uint32_t riscv_tdma_regs_rd32(uint32_t tile_id, uint32_t offset) {
-    switch (offset) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
+    RISCV_TDMA_REGS_SWITCH(offset) {
 #if TT_ARCH_VERSION == 0
-        case RISCV_TDMA_REGS_STATUS: return RISCV_TDMA_REGS_STATUS_RESET_VALUE;
+        RISCV_TDMA_REGS_STATUS_CASES() return RISCV_TDMA_REGS_STATUS_RESET_VALUE;
 #endif
         RISCV_TDMA_REGS_RD_DEFAULT_CASES()
         default: TTSIM_ERROR(UnsupportedFunctionality, "offset=0x%x", offset);
@@ -878,20 +866,21 @@ static uint32_t riscv_tdma_regs_rd32(uint32_t tile_id, uint32_t offset) {
 }
 
 static void riscv_tdma_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
 #if TT_ARCH_VERSION == 0
     TensixTile *p_tile = &g_t_tiles[tile_id];
 #endif
-    switch (offset) {
+    RISCV_TDMA_REGS_SWITCH(offset) {
 #if TT_ARCH_VERSION == 0
-        case RISCV_TDMA_REGS_XMOV_SRC_ADDR: p_tile->tdma_xmov_src_addr = data; break; // L1 address >> 4
-        case RISCV_TDMA_REGS_XMOV_DST_ADDR: // must be MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
+        RISCV_TDMA_REGS_XMOV_SRC_ADDR_CASES() p_tile->tdma_xmov_src_addr = data; break; // L1 address >> 4
+        RISCV_TDMA_REGS_XMOV_DST_ADDR_CASES() // must be MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
             TTSIM_VERIFY(data == 0x4000, UnsupportedFunctionality, "XMOV_DST_ADDR=0x%x", data);
             break;
-        case RISCV_TDMA_REGS_XMOV_SIZE: p_tile->tdma_xmov_size = data; break; // size in bytes >> 4
-        case RISCV_TDMA_REGS_XMOV_DIRECTION: // must be XMOV_L1_TO_L0
+        RISCV_TDMA_REGS_XMOV_SIZE_CASES() p_tile->tdma_xmov_size = data; break; // size in bytes >> 4
+        RISCV_TDMA_REGS_XMOV_DIRECTION_CASES() // must be XMOV_L1_TO_L0
             TTSIM_VERIFY(data == 1, UnsupportedFunctionality, "XMOV_DIRECTION=0x%x", data);
             break;
-        case RISCV_TDMA_REGS_COMMAND_ADDR: {
+        RISCV_TDMA_REGS_COMMAND_ADDR_CASES() {
             TTSIM_VERIFY(data == 0x40, UnsupportedFunctionality, "data=0x%x", data); // cmd=CMD_TDMA_XMOV, mover_number=0
             uint32_t src_addr = p_tile->tdma_xmov_src_addr;
             uint32_t size = p_tile->tdma_xmov_size;
@@ -901,7 +890,7 @@ static void riscv_tdma_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t dat
             break;
         }
 #endif
-        case RISCV_TDMA_REGS_CLK_GATE_EN: break;
+        RISCV_TDMA_REGS_CLK_GATE_EN_CASES() break;
         RISCV_TDMA_REGS_WR_DEFAULT_CASES()
         default: TTSIM_ERROR(UnsupportedFunctionality, "offset=0x%x", offset);
     }
@@ -1013,51 +1002,55 @@ static uint32_t debug_bus_rd_data(const TensixState *p_tensix, uint32_t ctrl) {
 
 template<char tile_type>
 static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint32_t offset) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     auto *p_tile = get_tile<tile_type>(tile_id);
-    switch (offset) {
-        case RISCV_DEBUG_REGS_DBG_ARRAY_RD_DATA:
+    RISCV_DEBUG_REGS_SWITCH(offset) {
+        RISCV_DEBUG_REGS_DBG_ARRAY_RD_DATA_CASES()
             if constexpr (tile_type == 'T') {
                 TTSIM_VERIFY(p_tile->dbg_array_rd_en, UnsupportedFunctionality, "DBG_ARRAY_RD_DATA when DBG_ARRAY_RD_EN=0");
                 return tensix_debug_array_rd32(&p_tile->tensix[0], p_tile->dbg_array_rd_cmd);
             }
             TTSIM_ERROR(UnsupportedFunctionality, "DBG_ARRAY_RD_DATA in eth tile");
-        case RISCV_DEBUG_REGS_DBG_RD_DATA:
+        RISCV_DEBUG_REGS_DBG_RD_DATA_CASES()
             if constexpr (tile_type == 'T') {
                 return debug_bus_rd_data(&p_tile->tensix[0], p_tile->dbg_bus_ctrl);
             }
             TTSIM_ERROR(UnsupportedFunctionality, "DBG_RD_DATA in eth tile");
-        case RISCV_DEBUG_REGS_DBG_INSTRN_BUF_STATUS: TTSIM_ERROR(UnsupportedFunctionality, "DBG_INSTRN_BUF_STATUS");
-        case RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE:
+        RISCV_DEBUG_REGS_DBG_INSTRN_BUF_STATUS_CASES() TTSIM_ERROR(UnsupportedFunctionality, "DBG_INSTRN_BUF_STATUS");
+        RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE_CASES()
             if constexpr (tile_type == 'T') {
                 return 0;
             }
             TTSIM_ERROR(UnsupportedFunctionality, "DBG_FEATURE_DISABLE in eth tile");
-        case RISCV_DEBUG_REGS_TENSIX_CREG_RDDATA:
+        RISCV_DEBUG_REGS_TENSIX_CREG_RDDATA_CASES()
             if constexpr (tile_type == 'T') {
                 return p_tile->tensix_creg_rddata;
             }
             TTSIM_ERROR(UnsupportedFunctionality, "TENSIX_CREG_RDDATA in eth tile");
-        case RISCV_DEBUG_REGS_SOFT_RESET_0: return p_tile->soft_reset_0;
-        case RISCV_DEBUG_REGS_WALL_CLOCK_0: return uint32_t(g_clock);
-        case RISCV_DEBUG_REGS_WALL_CLOCK_1: return uint32_t(g_clock >> 32); // high part, unlatched
-        case RISCV_DEBUG_REGS_WALL_CLOCK_1_AT: return uint32_t(g_clock >> 32); // XXX add the latching behavior on this reg
+        RISCV_DEBUG_REGS_SOFT_RESET_0_CASES() return p_tile->soft_reset_0;
+        RISCV_DEBUG_REGS_WALL_CLOCK_0_CASES() return uint32_t(g_clock);
+        RISCV_DEBUG_REGS_WALL_CLOCK_1_CASES() return uint32_t(g_clock >> 32); // high part, unlatched
+        // On Wormhole and Blackhole the latched high part follows the counter from any access to WALL_CLOCK_0 until
+        // the next access to another register, so its value depends on bus timing. The live high part differs from
+        // what the hardware returns only across a carry out of the low part, so no latch is modeled.
+        RISCV_DEBUG_REGS_WALL_CLOCK_1_AT_CASES() return uint32_t(g_clock >> 32);
 #if TT_ARCH_VERSION == 1
-        case RISCV_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE:
+        RISCV_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_CASES()
             if constexpr (tile_type == 'T') {
                 return p_tile->trisc_reset_pc_override;
             }
             TTSIM_ERROR(UnsupportedFunctionality, "TRISC_RESET_PC_OVERRIDE in eth tile");
-        case RISCV_DEBUG_REGS_TRISC0_RESET_PC:
+        RISCV_DEBUG_REGS_TRISC0_RESET_PC_CASES()
             if constexpr (tile_type == 'T') {
                 return p_tile->trisc0_reset_pc;
             }
             TTSIM_ERROR(UnsupportedFunctionality, "TRISC0_RESET_PC in eth tile");
-        case RISCV_DEBUG_REGS_TRISC1_RESET_PC:
+        RISCV_DEBUG_REGS_TRISC1_RESET_PC_CASES()
             if constexpr (tile_type == 'T') {
                 return p_tile->trisc1_reset_pc;
             }
             TTSIM_ERROR(UnsupportedFunctionality, "TRISC1_RESET_PC in eth tile");
-        case RISCV_DEBUG_REGS_TRISC2_RESET_PC:
+        RISCV_DEBUG_REGS_TRISC2_RESET_PC_CASES()
             if constexpr (tile_type == 'T') {
                 return p_tile->trisc2_reset_pc;
             }
@@ -1084,38 +1077,39 @@ void risc_prefetch_ctrl_wr(uint32_t tile_id, uint32_t tensix_id, uint32_t data) 
 }
 
 [[nodiscard]] static bool riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t offset, uint32_t data) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     TensixTile *p_tile = &g_t_tiles[tile_id];
-    switch (offset) {
-        case RISCV_DEBUG_REGS_CG_CTRL_HYST0:
+    RISCV_DEBUG_REGS_SWITCH(offset) {
+        RISCV_DEBUG_REGS_CG_CTRL_HYST0_CASES()
             TTSIM_VERIFY(!(data & 0x80808080), UnsupportedFunctionality, "cg_ctrl_hyst0=0x%x", data);
             break;
-        case RISCV_DEBUG_REGS_CG_CTRL_HYST1:
+        RISCV_DEBUG_REGS_CG_CTRL_HYST1_CASES()
             TTSIM_VERIFY(!(data & 0x80808080), UnsupportedFunctionality, "cg_ctrl_hyst1=0x%x", data);
             break;
-        case RISCV_DEBUG_REGS_CG_CTRL_HYST2:
+        RISCV_DEBUG_REGS_CG_CTRL_HYST2_CASES()
             TTSIM_VERIFY(!(data & 0x80808080), UnsupportedFunctionality, "cg_ctrl_hyst2=0x%x", data);
             break;
-        case RISCV_DEBUG_REGS_DBG_BUS_CTRL:
+        RISCV_DEBUG_REGS_DBG_BUS_CTRL_CASES()
             TTSIM_VERIFY(!(data & 0xD9000000), UnsupportedFunctionality, "reserved bit set in DBG_BUS_CTRL=0x%x", data);
             p_tile->dbg_bus_ctrl = data;
             break;
-        case RISCV_DEBUG_REGS_TENSIX_CREG_READ:
+        RISCV_DEBUG_REGS_TENSIX_CREG_READ_CASES()
             TTSIM_VERIFY(data < TENSIX_CFG_STATE_SIZE * 4, UnimplementedFunctionality,
                 "TENSIX_CREG_READ: data=0x%x", data);
             p_tile->tensix_creg_rddata = tensix_cfg_rd32(&p_tile->tensix[0], 0, 4 * data);
             break;
-        case RISCV_DEBUG_REGS_DBG_ARRAY_RD_EN:
+        RISCV_DEBUG_REGS_DBG_ARRAY_RD_EN_CASES()
             TTSIM_VERIFY(data <= 1, UnsupportedFunctionality, "DBG_ARRAY_RD_EN: data=0x%x", data);
             p_tile->dbg_array_rd_en = data;
             break;
-        case RISCV_DEBUG_REGS_DBG_ARRAY_RD_CMD:
+        RISCV_DEBUG_REGS_DBG_ARRAY_RD_CMD_CASES()
             TTSIM_VERIFY(p_tile->dbg_array_rd_en, UnsupportedFunctionality, "DBG_ARRAY_RD_CMD when DBG_ARRAY_RD_EN=0");
             p_tile->dbg_array_rd_cmd = data;
             break;
-        case RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE:
+        RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE_CASES()
             TTSIM_VERIFY(!data, UnsupportedFunctionality, "DBG_FEATURE_DISABLE=0x%x", data);
             break;
-        case RISCV_DEBUG_REGS_SOFT_RESET_0: {
+        RISCV_DEBUG_REGS_SOFT_RESET_0_CASES() {
             data &= 0x7FFFFFFF; // ignore bit 31 written by UMD
 #if TT_ARCH_VERSION == 1
             // A pulse of bit 10 (Matrix Unit, SFPU, SrcA) can hang a thread whose Matrix Unit instruction is in flight,
@@ -1128,9 +1122,18 @@ void risc_prefetch_ctrl_wr(uint32_t tile_id, uint32_t tensix_id, uint32_t data) 
             for (uint32_t rv32_id = 0; rv32_id < RV32_CORES_PER_T_TILE; rv32_id++) {
                 if (data & soft_reset_bits[rv32_id]) { // put core into reset
                     ttsim_rv32_set_core_active('T', tile_id, rv32_id, false);
+                    // The hardware discards the values in the mailboxes this core writes
+                    for (uint32_t reader = 0; (rv32_id != RV32_ID_NCRISC) && (reader < 4); reader++) {
+                        TTSIM_VERIFY(!p_tile->tensix[0].mailbox_has_data[rv32_id][reader], NonContractualBehavior,
+                            "mailbox %u to %u: writer soft reset while the mailbox holds a value", rv32_id, reader);
+                    }
                 } else if (!ttsim_rv32_get_core_active('T', tile_id, rv32_id)) { // take core out of reset
                     ttsim_rv32_set_core_active('T', tile_id, rv32_id, true);
                     rv32_reset_caches(&p_tile->rv32[rv32_id]);
+                    memset(p_tile->rv32[rv32_id].x_regs, 0, sizeof(p_tile->rv32[rv32_id].x_regs));
+#if TT_ARCH_VERSION == 1
+                    memset(p_tile->rv32[rv32_id].f_regs, 0, sizeof(p_tile->rv32[rv32_id].f_regs));
+#endif
                     uint32_t reset_pc;
                     switch (rv32_id) {
                         case RV32_ID_BRISC: reset_pc = 0; break; // reset PC for brisc is always zero
@@ -1146,7 +1149,7 @@ void risc_prefetch_ctrl_wr(uint32_t tile_id, uint32_t tensix_id, uint32_t data) 
                         case RV32_ID_NCRISC:
                             reset_pc = (p_tile->ncrisc_reset_pc_override & 1) ? p_tile->ncrisc_reset_pc : 0x12000;
                             break;
-                        default: TTSIM_ERROR(AssertionFailure, "rv32_id=%d", rv32_id);
+                        default: TTSIM_UNREACHABLE("rv32_id=%d", rv32_id);
                     }
                     p_tile->rv32[rv32_id].pc = reset_pc;
 #if TT_ARCH_VERSION == 1
@@ -1159,14 +1162,14 @@ void risc_prefetch_ctrl_wr(uint32_t tile_id, uint32_t tensix_id, uint32_t data) 
             break;
         }
 #if TT_ARCH_VERSION == 1
-        case RISCV_DEBUG_REGS_TRISC0_RESET_PC: p_tile->trisc0_reset_pc = data; break;
-        case RISCV_DEBUG_REGS_TRISC1_RESET_PC: p_tile->trisc1_reset_pc = data; break;
-        case RISCV_DEBUG_REGS_TRISC2_RESET_PC: p_tile->trisc2_reset_pc = data; break;
-        case RISCV_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE: p_tile->trisc_reset_pc_override = data; break;
-        case RISCV_DEBUG_REGS_NCRISC_RESET_PC: p_tile->ncrisc_reset_pc = data; break;
-        case RISCV_DEBUG_REGS_NCRISC_RESET_PC_OVERRIDE: p_tile->ncrisc_reset_pc_override = data; break;
-        case RISCV_DEBUG_REGS_DEST_CG_CTRL: break;
-        case RISCV_DEBUG_REGS_CG_CTRL_EN:
+        RISCV_DEBUG_REGS_TRISC0_RESET_PC_CASES() p_tile->trisc0_reset_pc = data; break;
+        RISCV_DEBUG_REGS_TRISC1_RESET_PC_CASES() p_tile->trisc1_reset_pc = data; break;
+        RISCV_DEBUG_REGS_TRISC2_RESET_PC_CASES() p_tile->trisc2_reset_pc = data; break;
+        RISCV_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_CASES() p_tile->trisc_reset_pc_override = data; break;
+        RISCV_DEBUG_REGS_NCRISC_RESET_PC_CASES() p_tile->ncrisc_reset_pc = data; break;
+        RISCV_DEBUG_REGS_NCRISC_RESET_PC_OVERRIDE_CASES() p_tile->ncrisc_reset_pc_override = data; break;
+        RISCV_DEBUG_REGS_DEST_CG_CTRL_CASES() break;
+        RISCV_DEBUG_REGS_CG_CTRL_EN_CASES()
             TTSIM_VERIFY(!(data & ~0x1FFFF), UnsupportedFunctionality, "cg_ctrl_en=0x%x", data);
             break;
 #endif
@@ -1180,7 +1183,7 @@ uint32_t remap_virtual_coordinate(const BaseTile *base_tile, uint32_t noc_instan
     uint32_t coord_x = coord & 63;
     uint32_t coord_y = coord >> 6;
 #if TT_ARCH_VERSION == 0
-    TTSIM_VERIFY(coord <= 0xFFF, AssertionFailure, "coord=0x%x", coord);
+    TTSIM_ASSERT(coord <= 0xFFF, "coord=0x%x", coord);
     TTSIM_VERIFY((coord_x < 32) && (coord_y < 32), UnsupportedFunctionality, "virtual coordinate %d,%d", coord_x, coord_y);
     if (base_tile->niu_cfg_0[noc_instance] & (1u << 14)) {
         coord_x = noc_translation_table_get(base_tile->noc_translation_x[noc_instance], coord_x);
@@ -1195,7 +1198,7 @@ uint32_t remap_virtual_coordinate(const BaseTile *base_tile, uint32_t noc_instan
     }
     return coord_x | (coord_y << 6);
 #elif TT_ARCH_VERSION == 1
-    TTSIM_VERIFY(coord <= 0xFFF, AssertionFailure, "coord=0x%x", coord);
+    TTSIM_ASSERT(coord <= 0xFFF, "coord=0x%x", coord);
     TTSIM_VERIFY((coord_x < 32) && (coord_y < 32), UnsupportedFunctionality, "virtual coordinate %d,%d", coord_x, coord_y);
     if (base_tile->niu_cfg_0[noc_instance] & (1u << 14)) {
         uint32_t virtual_x = coord_x;
@@ -1228,48 +1231,49 @@ static uint32_t noc_node_id(uint32_t noc_instance, uint32_t coord) {
     if (noc_instance) {
         coord = (16 | (11 << 6)) - coord;
     }
-    // XXX other fields of this register need to be filled in
+    uint32_t dateline_x = (coord & 0x3F) == 0;
+    uint32_t dateline_y = (coord >> 6) == 0;
     uint32_t routing_dir = !noc_instance; // true on NOC0, false on NOC1
-    return coord | (17 << 12) | (12 << 19) | (routing_dir << 28);
+    return coord | (17 << 12) | (12 << 19) | (dateline_x << 26) | (dateline_y << 27) | (routing_dir << 28);
 #endif
 }
 
 // NOC registers common to every tile type, backed by BaseTile storage.
 static uint32_t base_noc_regs_rd32(const BaseTile *p_tile, char tile_type, uint32_t tile_id, uint32_t noc_instance, uint32_t offset) {
-    switch (offset) {
-        case NOC_REGS_NOC_NODE_ID: {
+    NOC_REGS_SWITCH(offset) {
+        NOC_REGS_NOC_NODE_ID_CASES() {
             uint32_t coord = tile_to_coord(tile_type, tile_id);
             return noc_node_id(noc_instance, coord);
         }
-        case NOC_REGS_NIU_CFG_0: return p_tile->niu_cfg_0[noc_instance];
-        case NOC_REGS_ROUTER_CFG_0: return p_tile->router_cfg_0[noc_instance];
-        case NOC_REGS_ROUTER_CFG_1: return p_tile->router_cfg_1[noc_instance];
-        case NOC_REGS_ROUTER_CFG_2: return p_tile->router_cfg_2[noc_instance];
-        case NOC_REGS_ROUTER_CFG_3: return p_tile->router_cfg_3[noc_instance];
-        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_0:
-        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_1:
-        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_2:
-        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_3:
+        NOC_REGS_NIU_CFG_0_CASES() return p_tile->niu_cfg_0[noc_instance];
+        NOC_REGS_ROUTER_CFG_0_CASES() return p_tile->router_cfg_0[noc_instance];
+        NOC_REGS_ROUTER_CFG_1_CASES() return p_tile->router_cfg_1[noc_instance];
+        NOC_REGS_ROUTER_CFG_2_CASES() return p_tile->router_cfg_2[noc_instance];
+        NOC_REGS_ROUTER_CFG_3_CASES() return p_tile->router_cfg_3[noc_instance];
+        NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_0_CASES()
+        NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_1_CASES()
+        NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_2_CASES()
+        NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_3_CASES()
 #if TT_ARCH_VERSION == 1
-        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_4:
-        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_5:
+        NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_4_CASES()
+        NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_5_CASES()
 #endif
             return p_tile->noc_translation_x[noc_instance][(offset - NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_0) / 4];
-        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_0:
-        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_1:
-        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_2:
-        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_3:
+        NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_0_CASES()
+        NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_1_CASES()
+        NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_2_CASES()
+        NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_3_CASES()
 #if TT_ARCH_VERSION == 1
-        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_4:
-        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_5:
+        NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_4_CASES()
+        NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_5_CASES()
 #endif
             return p_tile->noc_translation_y[noc_instance][(offset - NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_0) / 4];
-        case NOC_REGS_NOC_ID_LOGICAL: return p_tile->noc_id_logical[noc_instance];
+        NOC_REGS_NOC_ID_LOGICAL_CASES() return p_tile->noc_id_logical[noc_instance];
 #if TT_ARCH_VERSION == 1
-        case NOC_REGS_NOC_ID_TRANSLATE_COL_MASK: return p_tile->noc_id_translate_col_mask[noc_instance];
-        case NOC_REGS_NOC_ID_TRANSLATE_ROW_MASK: return p_tile->noc_id_translate_row_mask[noc_instance];
+        NOC_REGS_NOC_ID_TRANSLATE_COL_MASK_CASES() return p_tile->noc_id_translate_col_mask[noc_instance];
+        NOC_REGS_NOC_ID_TRANSLATE_ROW_MASK_CASES() return p_tile->noc_id_translate_row_mask[noc_instance];
 #endif
-        case NOC_REGS_NIU_MST_RD_DATA_WORD_RECEIVED:
+        NOC_REGS_NIU_MST_RD_DATA_WORD_RECEIVED_CASES()
             TTSIM_ERROR(UnsupportedFunctionality, "NIU_MST_RD_DATA_WORD_RECEIVED");
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "tile_type=%c tile_id=%d offset=0x%x", tile_type, tile_id, offset);
@@ -1307,124 +1311,60 @@ static void pcie_dbi_wr32(uint64_t offset, uint32_t value) {
 
 template<char tile_type>
 static uint32_t noc_regs_rd32(uint32_t tile_id, uint32_t noc_instance, uint32_t offset) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
 #if TT_ARCH_VERSION == 0
     uint32_t cmd_buf = offset / 0x400;
 #elif TT_ARCH_VERSION == 1
     uint32_t cmd_buf = offset / 0x800;
 #endif
     auto *p_tile = get_tile<tile_type>(tile_id);
-    switch (offset) {
-        case NOC_REGS_NOC_TARG_ADDR_LO(0):
-        case NOC_REGS_NOC_TARG_ADDR_LO(1):
-        case NOC_REGS_NOC_TARG_ADDR_LO(2):
-        case NOC_REGS_NOC_TARG_ADDR_LO(3):
+    NOC_REGS_SWITCH(offset) {
+        NOC_REGS_NOC_TARG_ADDR_LO_CASES()
             return p_tile->noc_targ_addr_lo[noc_instance][cmd_buf];
-        case NOC_REGS_NOC_TARG_ADDR_MID(0):
-        case NOC_REGS_NOC_TARG_ADDR_MID(1):
-        case NOC_REGS_NOC_TARG_ADDR_MID(2):
-        case NOC_REGS_NOC_TARG_ADDR_MID(3):
+        NOC_REGS_NOC_TARG_ADDR_MID_CASES()
             return p_tile->noc_targ_addr_mid[noc_instance][cmd_buf];
 #if TT_ARCH_VERSION == 1
-        case NOC_REGS_NOC_TARG_ADDR_HI(0):
-        case NOC_REGS_NOC_TARG_ADDR_HI(1):
-        case NOC_REGS_NOC_TARG_ADDR_HI(2):
-        case NOC_REGS_NOC_TARG_ADDR_HI(3):
+        NOC_REGS_NOC_TARG_ADDR_HI_CASES()
             return p_tile->noc_targ_addr_hi[noc_instance][cmd_buf];
 #endif
-        case NOC_REGS_NOC_RET_ADDR_LO(0):
-        case NOC_REGS_NOC_RET_ADDR_LO(1):
-        case NOC_REGS_NOC_RET_ADDR_LO(2):
-        case NOC_REGS_NOC_RET_ADDR_LO(3):
+        NOC_REGS_NOC_RET_ADDR_LO_CASES()
             return p_tile->noc_ret_addr_lo[noc_instance][cmd_buf];
-        case NOC_REGS_NOC_RET_ADDR_MID(0):
-        case NOC_REGS_NOC_RET_ADDR_MID(1):
-        case NOC_REGS_NOC_RET_ADDR_MID(2):
-        case NOC_REGS_NOC_RET_ADDR_MID(3):
+        NOC_REGS_NOC_RET_ADDR_MID_CASES()
             return p_tile->noc_ret_addr_mid[noc_instance][cmd_buf];
 #if TT_ARCH_VERSION == 1
-        case NOC_REGS_NOC_RET_ADDR_HI(0):
-        case NOC_REGS_NOC_RET_ADDR_HI(1):
-        case NOC_REGS_NOC_RET_ADDR_HI(2):
-        case NOC_REGS_NOC_RET_ADDR_HI(3):
+        NOC_REGS_NOC_RET_ADDR_HI_CASES()
             return p_tile->noc_ret_addr_hi[noc_instance][cmd_buf];
 #endif
-        case NOC_REGS_NOC_PACKET_TAG(0):
-        case NOC_REGS_NOC_PACKET_TAG(1):
-        case NOC_REGS_NOC_PACKET_TAG(2):
-        case NOC_REGS_NOC_PACKET_TAG(3):
+        NOC_REGS_NOC_PACKET_TAG_CASES()
             return p_tile->noc_packet_tag[noc_instance][cmd_buf];
-        case NOC_REGS_NOC_CTRL(0):
-        case NOC_REGS_NOC_CTRL(1):
-        case NOC_REGS_NOC_CTRL(2):
-        case NOC_REGS_NOC_CTRL(3):
+        NOC_REGS_NOC_CTRL_CASES()
             return p_tile->noc_ctrl[noc_instance][cmd_buf];
-        case NOC_REGS_NOC_AT_LEN_BE(0):
-        case NOC_REGS_NOC_AT_LEN_BE(1):
-        case NOC_REGS_NOC_AT_LEN_BE(2):
-        case NOC_REGS_NOC_AT_LEN_BE(3):
+        NOC_REGS_NOC_AT_LEN_BE_CASES()
             return p_tile->noc_at_len_be[noc_instance][cmd_buf];
-        case NOC_REGS_NOC_AT_DATA(0):
-        case NOC_REGS_NOC_AT_DATA(1):
-        case NOC_REGS_NOC_AT_DATA(2):
-        case NOC_REGS_NOC_AT_DATA(3):
+        NOC_REGS_NOC_AT_DATA_CASES()
             return p_tile->noc_at_data[noc_instance][cmd_buf];
-        case NOC_REGS_NOC_CMD_CTRL(0):
-        case NOC_REGS_NOC_CMD_CTRL(1):
-        case NOC_REGS_NOC_CMD_CTRL(2):
-        case NOC_REGS_NOC_CMD_CTRL(3):
+        NOC_REGS_NOC_CMD_CTRL_CASES()
             return 0; // always return "done" right now
 #if TT_ARCH_VERSION == 1
-        case NOC_REGS_NOC_CMD_BUF_AVAIL(0):
-        case NOC_REGS_NOC_CMD_BUF_AVAIL(1):
-        case NOC_REGS_NOC_CMD_BUF_AVAIL(2):
-        case NOC_REGS_NOC_CMD_BUF_AVAIL(3):
+        NOC_REGS_NOC_CMD_BUF_AVAIL_CASES()
             // free FIFO entries, a byte per command buffer (0 with the FIFOs off); always 16, as commands complete when issued
+            // On hardware this load can pass an earlier store to NIU_CFG_0 or NOC_CMD_CTRL still in the store queue (it
+            // doesn't overlap them) and show the FIFOs as before that store, e.g. 0 right after the enable unless
+            // software reads the register back or fences first. We apply stores in order, one of the legal outcomes;
+            // not checked.
             return bits<16,16>(p_tile->base.niu_cfg_0[noc_instance]) ? 0x10101010 : 0;
-        case NOC_REGS_NOC_CMD_BUF_OVFL(0):
-        case NOC_REGS_NOC_CMD_BUF_OVFL(1):
-        case NOC_REGS_NOC_CMD_BUF_OVFL(2):
-        case NOC_REGS_NOC_CMD_BUF_OVFL(3):
+        NOC_REGS_NOC_CMD_BUF_OVFL_CASES()
             return 0;
 #endif
-        case NOC_REGS_NIU_MST_ATOMIC_RESP_RECEIVED: return p_tile->niu_mst_atomic_resp_received[noc_instance];
-        case NOC_REGS_NIU_MST_WR_ACK_RECEIVED: return p_tile->niu_mst_wr_ack_received[noc_instance];
-        case NOC_REGS_NIU_MST_RD_RESP_RECEIVED: return p_tile->niu_mst_rd_resp_received[noc_instance];
-        case NOC_REGS_NIU_MST_POSTED_ATOMIC_SENT: return p_tile->niu_mst_posted_atomic_sent[noc_instance];
-        case NOC_REGS_NIU_MST_NONPOSTED_WR_REQ_SENT: return p_tile->niu_mst_nonposted_wr_req_sent[noc_instance];
-        case NOC_REGS_NIU_MST_POSTED_WR_REQ_SENT: return p_tile->niu_mst_posted_wr_req_sent[noc_instance];
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(0):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(1):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(2):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(3):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(4):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(5):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(6):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(7):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(8):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(9):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(10):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(11):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(12):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(13):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(14):
-        case NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(15):
-            return p_tile->niu_mst_reqs_outstanding[noc_instance][(offset - NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID(0)) >> 2];
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(0):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(1):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(2):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(3):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(4):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(5):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(6):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(7):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(8):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(9):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(10):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(11):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(12):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(13):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(14):
-        case NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID(15):
+        NOC_REGS_NIU_MST_ATOMIC_RESP_RECEIVED_CASES() return p_tile->niu_mst_atomic_resp_received[noc_instance];
+        NOC_REGS_NIU_MST_WR_ACK_RECEIVED_CASES() return p_tile->niu_mst_wr_ack_received[noc_instance];
+        NOC_REGS_NIU_MST_RD_RESP_RECEIVED_CASES() return p_tile->niu_mst_rd_resp_received[noc_instance];
+        NOC_REGS_NIU_MST_POSTED_ATOMIC_SENT_CASES() return p_tile->niu_mst_posted_atomic_sent[noc_instance];
+        NOC_REGS_NIU_MST_NONPOSTED_WR_REQ_SENT_CASES() return p_tile->niu_mst_nonposted_wr_req_sent[noc_instance];
+        NOC_REGS_NIU_MST_POSTED_WR_REQ_SENT_CASES() return p_tile->niu_mst_posted_wr_req_sent[noc_instance];
+        NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID_CASES()
+            return p_tile->niu_mst_reqs_outstanding[noc_instance][NOC_REGS_NIU_MST_REQS_OUTSTANDING_ID_INDEX(offset)];
+        NOC_REGS_NIU_MST_WRITE_REQS_OUTGOING_ID_CASES()
             return 0; // NIU_MST_WRITE_REQS_OUTGOING_ID would be incremented and decremented by the same amount for write transactions
         default:
             return base_noc_regs_rd32(&p_tile->base, tile_type, tile_id, noc_instance, offset);
@@ -1463,7 +1403,11 @@ static void noc_cmd_ctrl(uint32_t tile_id, uint32_t noc_instance, uint32_t cmd_b
     TTSIM_VERIFY((!bits<30,27>(noc_ctrl)), UnsupportedFunctionality, "noc_ctrl=0x%x", noc_ctrl);
     TTSIM_VERIFY((!bits<31,31>(noc_ctrl)), UnsupportedFunctionality, "noc_ctrl=0x%x", noc_ctrl);
     if (bits<5,5>(noc_ctrl)) { // multicast
+#if TT_ARCH_VERSION == 0
+        TTSIM_VERIFY((!bits<0,0>(noc_ctrl)), UnsupportedFunctionality, "multicast atomics");
+#else
         TTSIM_VERIFY((!bits<0,0>(noc_ctrl)), UnimplementedFunctionality, "multicast atomics");
+#endif
         TTSIM_VERIFY((bits<1,1>(noc_ctrl)), UnsupportedFunctionality, "multicast reads");
         TTSIM_VERIFY((!bits<3,3>(noc_ctrl)), UnimplementedFunctionality, "multicast inline writes");
 #if TT_ARCH_VERSION == 0
@@ -1519,6 +1463,11 @@ static void noc_cmd_ctrl(uint32_t tile_id, uint32_t noc_instance, uint32_t cmd_b
         TTSIM_VERIFY((noc_at_len_be >= 1) && (noc_at_len_be <= NOC_MAX_PACKET_SIZE), UnsupportedFunctionality, "multicast: noc_at_len_be=%d", noc_at_len_be);
         TTSIM_VERIFY(src_tile_type == tile_type, UnsupportedFunctionality, "multicast: src_tile_type=%c", src_tile_type);
         TTSIM_VERIFY(src_tile_id == tile_id, UnsupportedFunctionality, "multicast: src_tile_id=0x%x", src_tile_id); // write must be from current tile
+        // A rectangle of the sending tile alone is never delivered or acknowledged on the hardware unless the source is
+        // included and the path not reserved: the request stays outstanding and the NIU sends no later multicast
+        TTSIM_VERIFY((dst_coordinate_start != src_coordinate) || (dst_coordinate != src_coordinate) ||
+            (bits<17,17>(noc_ctrl) && !bits<8,8>(noc_ctrl)), UndefinedBehavior,
+            "multicast to the sender alone: noc_ctrl=0x%x", noc_ctrl);
         TTSIM_VERIFY(in_bounds(src_addr, noc_at_len_be, sizeof(p_tile->sram)), UnsupportedFunctionality, "multicast: src_addr=0x%llx", src_addr);
 
         if (dst_addr < TENSIX_SRAM_SIZE) { // L1 -> L1
@@ -1643,8 +1592,8 @@ static void noc_cmd_ctrl(uint32_t tile_id, uint32_t noc_instance, uint32_t cmd_b
         TTSIM_VERIFY(src_tile_type == tile_type, UnsupportedFunctionality, "write: src_tile_type=%c", src_tile_type);
         TTSIM_VERIFY(src_tile_id == tile_id, UnsupportedFunctionality, "write: src_tile_id=0x%x", src_tile_id); // write must be from current tile
         TTSIM_VERIFY(in_bounds(src_addr, noc_at_len_be, sizeof(p_tile->sram)), UnsupportedFunctionality, "write: src_addr=0x%llx", src_addr);
-        TTSIM_VERIFY((dst_tile_type == 'D') || (dst_tile_type == 'T') || (dst_tile_type == 'E') || (dst_tile_type == 'P') || (dst_tile_type == 'A'),
-            AssertionFailure, "write: dst_tile_type=%c", dst_tile_type);
+        TTSIM_ASSERT((dst_tile_type == 'D') || (dst_tile_type == 'T') || (dst_tile_type == 'E') || (dst_tile_type == 'P') || (dst_tile_type == 'A'),
+            "write: dst_tile_type=%c", dst_tile_type);
         TTSIM_VERIFY((src_addr & 15) == (dst_addr & 15), UndefinedBehavior, "write: alignment of src_addr=0x%llx and dst_addr=0x%llx does not match",
             src_addr, dst_addr);
         if ((dst_tile_type == tile_type) && (dst_tile_id == tile_id)) {
@@ -1662,8 +1611,8 @@ static void noc_cmd_ctrl(uint32_t tile_id, uint32_t noc_instance, uint32_t cmd_b
         TTSIM_VERIFY(dst_tile_type == tile_type, UnsupportedFunctionality, "read: dst_tile_type=%c", dst_tile_type);
         TTSIM_VERIFY(dst_tile_id == tile_id, UnsupportedFunctionality, "read: dst_tile_id=0x%x", dst_tile_id); // read must be to current tile
         TTSIM_VERIFY(in_bounds(dst_addr, noc_at_len_be, sizeof(p_tile->sram)), UnsupportedFunctionality, "read: dst_addr=0x%llx", dst_addr);
-        TTSIM_VERIFY((src_tile_type == 'D') || (src_tile_type == 'T') || (src_tile_type == 'E') || (src_tile_type == 'P') || (src_tile_type == 'A'),
-            AssertionFailure, "read: src_tile_type=%c", src_tile_type);
+        TTSIM_ASSERT((src_tile_type == 'D') || (src_tile_type == 'T') || (src_tile_type == 'E') || (src_tile_type == 'P') || (src_tile_type == 'A'),
+            "read: src_tile_type=%c", src_tile_type);
         if (src_tile_type == 'D') { // DRAM -> L1
 #if TT_ARCH_VERSION == 1
             TTSIM_VERIFY((src_addr & 63) == (dst_addr & 63), UndefinedBehavior, "read: alignment of src_addr=0x%llx and dst_addr=0x%llx does not match",
@@ -1689,98 +1638,63 @@ static void noc_cmd_ctrl(uint32_t tile_id, uint32_t noc_instance, uint32_t cmd_b
 
 template<char tile_type>
 static void noc_regs_wr32(uint32_t tile_id, uint32_t noc_instance, uint32_t offset, uint32_t data) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     auto *p_tile = get_tile<tile_type>(tile_id);
 #if TT_ARCH_VERSION == 0
     uint32_t cmd_buf = offset / 0x400;
 #else
     uint32_t cmd_buf = offset / 0x800;
 #endif
-    switch (offset) {
-        case NOC_REGS_NOC_TARG_ADDR_LO(0):
-        case NOC_REGS_NOC_TARG_ADDR_LO(1):
-        case NOC_REGS_NOC_TARG_ADDR_LO(2):
-        case NOC_REGS_NOC_TARG_ADDR_LO(3):
+    NOC_REGS_SWITCH(offset) {
+        NOC_REGS_NOC_TARG_ADDR_LO_CASES()
             p_tile->noc_targ_addr_lo[noc_instance][cmd_buf] = data;
             break;
-        case NOC_REGS_NOC_TARG_ADDR_MID(0):
-        case NOC_REGS_NOC_TARG_ADDR_MID(1):
-        case NOC_REGS_NOC_TARG_ADDR_MID(2):
-        case NOC_REGS_NOC_TARG_ADDR_MID(3):
+        NOC_REGS_NOC_TARG_ADDR_MID_CASES()
             p_tile->noc_targ_addr_mid[noc_instance][cmd_buf] = data;
             break;
 #if TT_ARCH_VERSION >= 1
-        case NOC_REGS_NOC_TARG_ADDR_HI(0):
-        case NOC_REGS_NOC_TARG_ADDR_HI(1):
-        case NOC_REGS_NOC_TARG_ADDR_HI(2):
-        case NOC_REGS_NOC_TARG_ADDR_HI(3):
+        NOC_REGS_NOC_TARG_ADDR_HI_CASES()
             p_tile->noc_targ_addr_hi[noc_instance][cmd_buf] = data;
             break;
 #endif
-        case NOC_REGS_NOC_RET_ADDR_LO(0):
-        case NOC_REGS_NOC_RET_ADDR_LO(1):
-        case NOC_REGS_NOC_RET_ADDR_LO(2):
-        case NOC_REGS_NOC_RET_ADDR_LO(3):
+        NOC_REGS_NOC_RET_ADDR_LO_CASES()
             p_tile->noc_ret_addr_lo[noc_instance][cmd_buf] = data;
             break;
-        case NOC_REGS_NOC_RET_ADDR_MID(0):
-        case NOC_REGS_NOC_RET_ADDR_MID(1):
-        case NOC_REGS_NOC_RET_ADDR_MID(2):
-        case NOC_REGS_NOC_RET_ADDR_MID(3):
+        NOC_REGS_NOC_RET_ADDR_MID_CASES()
             p_tile->noc_ret_addr_mid[noc_instance][cmd_buf] = data;
             break;
 #if TT_ARCH_VERSION >= 1
-        case NOC_REGS_NOC_RET_ADDR_HI(0):
-        case NOC_REGS_NOC_RET_ADDR_HI(1):
-        case NOC_REGS_NOC_RET_ADDR_HI(2):
-        case NOC_REGS_NOC_RET_ADDR_HI(3):
+        NOC_REGS_NOC_RET_ADDR_HI_CASES()
             p_tile->noc_ret_addr_hi[noc_instance][cmd_buf] = data;
             break;
 #endif
-        case NOC_REGS_NOC_PACKET_TAG(0):
-        case NOC_REGS_NOC_PACKET_TAG(1):
-        case NOC_REGS_NOC_PACKET_TAG(2):
-        case NOC_REGS_NOC_PACKET_TAG(3):
+        NOC_REGS_NOC_PACKET_TAG_CASES()
             // Only support having packet id set in the packet tag
             TTSIM_VERIFY(!(data & ~(0xF << 10)), UnsupportedFunctionality, "noc_packet_tag=0x%x", data);
             p_tile->noc_packet_tag[noc_instance][cmd_buf] = data;
             break;
-        case NOC_REGS_NOC_CTRL(0):
-        case NOC_REGS_NOC_CTRL(1):
-        case NOC_REGS_NOC_CTRL(2):
-        case NOC_REGS_NOC_CTRL(3):
+        NOC_REGS_NOC_CTRL_CASES()
             p_tile->noc_ctrl[noc_instance][cmd_buf] = data;
             break;
-        case NOC_REGS_NOC_AT_LEN_BE(0):
-        case NOC_REGS_NOC_AT_LEN_BE(1):
-        case NOC_REGS_NOC_AT_LEN_BE(2):
-        case NOC_REGS_NOC_AT_LEN_BE(3):
+        NOC_REGS_NOC_AT_LEN_BE_CASES()
             p_tile->noc_at_len_be[noc_instance][cmd_buf] = data;
             break;
-        case NOC_REGS_NOC_AT_DATA(0):
-        case NOC_REGS_NOC_AT_DATA(1):
-        case NOC_REGS_NOC_AT_DATA(2):
-        case NOC_REGS_NOC_AT_DATA(3):
+        NOC_REGS_NOC_AT_DATA_CASES()
             p_tile->noc_at_data[noc_instance][cmd_buf] = data;
             break;
 #if TT_ARCH_VERSION == 1
-        case NOC_REGS_NOC_BRCST_EXCLUDE(0):
-        case NOC_REGS_NOC_BRCST_EXCLUDE(1):
-        case NOC_REGS_NOC_BRCST_EXCLUDE(2):
-        case NOC_REGS_NOC_BRCST_EXCLUDE(3):
+        NOC_REGS_NOC_BRCST_EXCLUDE_CASES()
             TTSIM_VERIFY(!data, UnsupportedFunctionality, "noc_brcst_exclude=0x%x", data);
             break;
 #endif
-        case NOC_REGS_NOC_CMD_CTRL(0):
-        case NOC_REGS_NOC_CMD_CTRL(1):
-        case NOC_REGS_NOC_CMD_CTRL(2):
-        case NOC_REGS_NOC_CMD_CTRL(3):
+        NOC_REGS_NOC_CMD_CTRL_CASES()
             TTSIM_VERIFY(data == 1, UndefinedBehavior, "noc_cmd_ctrl[%d] data=0x%x", cmd_buf, data);
             if constexpr (tile_type == 'E') {
                 eth_set_busy(p_tile);
             }
             noc_cmd_ctrl<tile_type>(tile_id, noc_instance, cmd_buf);
             break;
-        case NOC_REGS_NOC_CLEAR_OUTSTANDING_REQ_CNT:
+        NOC_REGS_NOC_CLEAR_OUTSTANDING_REQ_CNT_CASES()
             // Only support clearing all the transaction ids
             TTSIM_VERIFY(data, UnsupportedFunctionality, "no-op mask: noc_clear_outstanding_req_cnt=0x%x", data);
             TTSIM_VERIFY(data == ((1 << NUM_NOC_TRANSACTION_IDS) - 1), UnsupportedFunctionality, "noc_clear_outstanding_req_cnt=0x%x", data);
@@ -1788,39 +1702,39 @@ static void noc_regs_wr32(uint32_t tile_id, uint32_t noc_instance, uint32_t offs
                 p_tile->niu_mst_reqs_outstanding[noc_instance][i] = 0;
             }
             break;
-        case NOC_REGS_NIU_CFG_0: p_tile->base.niu_cfg_0[noc_instance] = data; break;
-        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_0:
-        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_1:
-        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_2:
-        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_3:
+        NOC_REGS_NIU_CFG_0_CASES() p_tile->base.niu_cfg_0[noc_instance] = data; break;
+        NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_0_CASES()
+        NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_1_CASES()
+        NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_2_CASES()
+        NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_3_CASES()
 #if TT_ARCH_VERSION == 1
-        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_4:
-        case NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_5:
+        NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_4_CASES()
+        NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_5_CASES()
 #endif
             p_tile->base.noc_translation_x[noc_instance][(offset - NOC_REGS_NOC_X_ID_TRANSLATE_TABLE_0) / 4] = data;
             break;
-        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_0:
-        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_1:
-        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_2:
-        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_3:
+        NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_0_CASES()
+        NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_1_CASES()
+        NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_2_CASES()
+        NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_3_CASES()
 #if TT_ARCH_VERSION == 1
-        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_4:
-        case NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_5:
+        NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_4_CASES()
+        NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_5_CASES()
 #endif
             p_tile->base.noc_translation_y[noc_instance][(offset - NOC_REGS_NOC_Y_ID_TRANSLATE_TABLE_0) / 4] = data;
             break;
-        case NOC_REGS_NOC_ID_LOGICAL: p_tile->base.noc_id_logical[noc_instance] = data; break;
+        NOC_REGS_NOC_ID_LOGICAL_CASES() p_tile->base.noc_id_logical[noc_instance] = data; break;
 #if TT_ARCH_VERSION == 1
-        case NOC_REGS_NOC_ID_TRANSLATE_COL_MASK: p_tile->base.noc_id_translate_col_mask[noc_instance] = data; break;
-        case NOC_REGS_NOC_ID_TRANSLATE_ROW_MASK: p_tile->base.noc_id_translate_row_mask[noc_instance] = data; break;
+        NOC_REGS_NOC_ID_TRANSLATE_COL_MASK_CASES() p_tile->base.noc_id_translate_col_mask[noc_instance] = data; break;
+        NOC_REGS_NOC_ID_TRANSLATE_ROW_MASK_CASES() p_tile->base.noc_id_translate_row_mask[noc_instance] = data; break;
 #endif
-        case NOC_REGS_ROUTER_CFG_0: p_tile->base.router_cfg_0[noc_instance] = data; break;
-        case NOC_REGS_ROUTER_CFG_1:
+        NOC_REGS_ROUTER_CFG_0_CASES() p_tile->base.router_cfg_0[noc_instance] = data; break;
+        NOC_REGS_ROUTER_CFG_1_CASES()
             TTSIM_VERIFY((data & NONTENSIX_COL_MASK) == NONTENSIX_COL_MASK, UndefinedBehavior, "router_cfg_1=0x%x", data); // cannot clear non-tensix cols
             p_tile->base.router_cfg_1[noc_instance] = data;
             break;
-        case NOC_REGS_ROUTER_CFG_2: p_tile->base.router_cfg_2[noc_instance] = data; break;
-        case NOC_REGS_ROUTER_CFG_3:
+        NOC_REGS_ROUTER_CFG_2_CASES() p_tile->base.router_cfg_2[noc_instance] = data; break;
+        NOC_REGS_ROUTER_CFG_3_CASES()
             TTSIM_VERIFY((data & NONTENSIX_ROW_MASK) == NONTENSIX_ROW_MASK, UndefinedBehavior, "router_cfg_3=0x%x", data); // cannot clear non-tensix rows
             p_tile->base.router_cfg_3[noc_instance] = data;
             break;
@@ -1831,6 +1745,7 @@ static void noc_regs_wr32(uint32_t tile_id, uint32_t noc_instance, uint32_t offs
 
 template<char tile_type>
 static uint32_t noc_overlay_rd32(uint32_t tile_id, uint32_t offset) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     auto *p_tile = get_tile<tile_type>(tile_id);
     uint32_t stream = offset / 0x1000;
     TTSIM_VERIFY(stream < std::size(p_tile->overlay_stream_remote_src), UndefinedBehavior, "stream=%d", stream);
@@ -1849,6 +1764,7 @@ static uint32_t noc_overlay_rd32(uint32_t tile_id, uint32_t offset) {
 
 template<char tile_type>
 static void noc_overlay_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     auto *p_tile = get_tile<tile_type>(tile_id);
     uint32_t stream = offset / 0x1000;
     TTSIM_VERIFY(stream < std::size(p_tile->overlay_stream_remote_src), UndefinedBehavior, "stream=%d", stream);
@@ -1891,10 +1807,14 @@ static inline std::pair<uint32_t, uint32_t> trisc_pipe(uint32_t riscv_id) {
 static void tensix_mop_cfg_wr32(uint32_t tile_id, uint32_t riscv_id, uint32_t offset, uint32_t data) {
     TensixTile *p_tile = &g_t_tiles[tile_id];
     auto [tensix_id, pipe] = trisc_pipe(riscv_id);
-    TTSIM_VERIFY(!(offset & 3), AssertionFailure, "misaligned offset=0x%x", offset);
-    switch (offset / 4) {
-        case TENSIX_MOP_CFG_LOOP(0) / 4 ... TENSIX_MOP_CFG_LOOP(8) / 4:
-            p_tile->tensix[tensix_id].mop_cfg[pipe][(offset - TENSIX_MOP_CFG_LOOP(0)) / 4] = data;
+    TTSIM_ASSERT(!(offset & 3), "misaligned offset=0x%x", offset);
+    TENSIX_MOP_CFG_SWITCH(offset) {
+        TENSIX_MOP_CFG_LOOP_CASES()
+            // Not checked: on the hardware a store while one of this thread's MOPs is queued or expanding changes the
+            // instructions that MOP has still to emit, and the loop counts of a MOP taken after it; ttsim copies the
+            // configuration as it takes each MOP. Software waits on MOP sync first and uses that load's result: a later
+            // store can pass a load whose result nothing uses
+            p_tile->tensix[tensix_id].mop_cfg[pipe][TENSIX_MOP_CFG_LOOP_INDEX(offset)] = data;
             break;
         default:
             TTSIM_ERROR(UndefinedBehavior, "offset=0x%x", offset); // unmapped past the LOOP words
@@ -1911,10 +1831,10 @@ static uint32_t tensix_regfile_rd32(uint32_t tile_id, uint32_t riscv_id, uint32_
         offset &= 0xFF;
     }
     auto [tensix_id, pipe] = trisc_pipe(riscv_id);
-    TTSIM_VERIFY(!(offset & 3), AssertionFailure, "misaligned offset=0x%x", offset);
-    switch (offset / 4) {
-        case TENSIX_REGFILE_GPR(0) / 4 ... TENSIX_REGFILE_GPR(63) / 4:
-            return p_tile->tensix[tensix_id].dma_regs[pipe][(offset - TENSIX_REGFILE_GPR(0)) / 4];
+    TTSIM_ASSERT(!(offset & 3), "misaligned offset=0x%x", offset);
+    TENSIX_REGFILE_SWITCH(offset) {
+        TENSIX_REGFILE_GPR_CASES()
+            return p_tile->tensix[tensix_id].dma_regs[pipe][TENSIX_REGFILE_GPR_INDEX(offset)];
         default:
             TTSIM_ERROR(UndefinedBehavior, "offset=0x%x", offset);
     }
@@ -1928,10 +1848,10 @@ static void tensix_regfile_wr32(uint32_t tile_id, uint32_t riscv_id, uint32_t of
         "BRISC write to thread %d GPRs, offset=0x%x", offset >> 8, offset);
     riscv_id = (riscv_id == RV32_ID_BRISC) ? RV32_ID_TRISC0 : riscv_id;
     auto [tensix_id, pipe] = trisc_pipe(riscv_id);
-    TTSIM_VERIFY(!(offset & 3), AssertionFailure, "misaligned offset=0x%x", offset);
-    switch (offset / 4) {
-        case TENSIX_REGFILE_GPR(0) / 4 ... TENSIX_REGFILE_GPR(63) / 4:
-            p_tile->tensix[tensix_id].dma_regs[pipe][(offset - TENSIX_REGFILE_GPR(0)) / 4] = data;
+    TTSIM_ASSERT(!(offset & 3), "misaligned offset=0x%x", offset);
+    TENSIX_REGFILE_SWITCH(offset) {
+        TENSIX_REGFILE_GPR_CASES()
+            p_tile->tensix[tensix_id].dma_regs[pipe][TENSIX_REGFILE_GPR_INDEX(offset)] = data;
             break;
         default:
             TTSIM_ERROR(UndefinedBehavior, "offset=0x%x", offset);
@@ -1963,9 +1883,9 @@ static std::pair<bool, uint32_t> tensix_pc_buf_rd32(uint32_t tile_id, uint32_t r
     TTSIM_VERIFY(riscv_id != RV32_ID_BRISC, UnimplementedFunctionality, "BRISC side of the PC buffer");
     auto [tensix_id, pipe] = trisc_pipe(riscv_id);
     TensixTile *p_tile = &g_t_tiles[tile_id];
-    TTSIM_VERIFY(!(offset & 3), AssertionFailure, "misaligned offset=0x%x", offset);
-    switch (offset / 4) {
-        case TENSIX_PC_BUF_PC / 4:
+    TTSIM_ASSERT(!(offset & 3), "misaligned offset=0x%x", offset);
+    TENSIX_PC_BUF_SWITCH(offset) {
+        TENSIX_PC_BUF_PC_CASES()
             // Retrying the read changes nothing, so stop stepping the core, unless it was put into reset earlier in
             // this clock
             if ((p_tile->rv32_cores_active >> riscv_id) & 1) {
@@ -1973,21 +1893,32 @@ static std::pair<bool, uint32_t> tensix_pc_buf_rd32(uint32_t tile_id, uint32_t r
                 p_tile->rv32_cores_parked |= 1 << riscv_id;
             }
             return {false, 0}; // stall until a PC is pushed, i.e. forever, as pushes are unimplemented
-        case TENSIX_PC_BUF_TENSIX_SYNC / 4:
+        TENSIX_PC_BUF_TENSIX_SYNC_CASES()
+            // Not checked: while this load waits, the hardware still takes the RISC's next load from the PC buffer.
+            // A semaphore load then ends this one at once, before the thread is idle, with the semaphore's value, and
+            // gets this load's answer later; another done-check load hangs the RISC. A PC buffer load within two
+            // (Wormhole) or six (Blackhole) instructions after this one gets there, unless one of those instructions
+            // uses this load's value
             if (!tensix_thread_idle(&p_tile->tensix[tensix_id], pipe)) {
                 return {false, 0}; // stall until previously issued Tensix instructions from this thread have finished
             }
 #if TT_ARCH_VERSION == 0
             // An idle thread's STALLWAIT on its own units has been released, though a SEMWAIT may still be latched
+            // Not checked: one with a condition on shared state (C8..C12) may still be latched, so a SEMWAIT after
+            // this load can replace it unless that STALLWAIT's block mask has B1. And ttsim holds the thread at an
+            // unmet STALLWAIT, so this load waits for it to be met, where the hardware latches the wait and returns
             if (!p_tile->tensix[tensix_id].wait_sems[pipe]) {
                 p_tile->tensix[tensix_id].wait_block[pipe] = 0;
             }
 #endif
             return {true, 0};
-        case TENSIX_PC_BUF_MOP_SYNC / 4:
+        TENSIX_PC_BUF_MOP_SYNC_CASES()
             return {tensix_mop_expander_idle(&p_tile->tensix[tensix_id], pipe), 0}; // stall until done expanding MOPs
-        case TENSIX_PC_BUF_SEMAPHORE(0) / 4 ... TENSIX_PC_BUF_SEMAPHORE(7) / 4: {
-            uint32_t sem_index = (offset - TENSIX_PC_BUF_SEMAPHORE(0)) / 4;
+        TENSIX_PC_BUF_SEMAPHORE_CASES() {
+            // Not checked: a semaphore load right after another one, with no instruction between them, can be lost and
+            // hang the TRISC (on Blackhole always, otherwise at three of the four positions of the pair in a 16-byte
+            // block)
+            uint32_t sem_index = TENSIX_PC_BUF_SEMAPHORE_INDEX(offset);
             TTSIM_ASSERT(sem_index < std::size(p_tile->tensix[tensix_id].sem));
             return {true, p_tile->tensix[tensix_id].sem[sem_index]};
         }
@@ -1999,12 +1930,12 @@ static bool tensix_pc_buf_wr32(uint32_t tile_id, uint32_t riscv_id, uint32_t off
     TTSIM_VERIFY(riscv_id != RV32_ID_BRISC, UnimplementedFunctionality, "BRISC side of the PC buffer");
     auto [tensix_id, pipe] = trisc_pipe(riscv_id);
     TensixTile *p_tile = &g_t_tiles[tile_id];
-    TTSIM_VERIFY(!(offset & 3), AssertionFailure, "misaligned offset=0x%x", offset);
-    switch (offset / 4) {
-        case TENSIX_PC_BUF_TENSIX_SYNC / 4: break;
-        case TENSIX_PC_BUF_MOP_SYNC / 4: break;
-        case TENSIX_PC_BUF_SEMAPHORE(0) / 4 ... TENSIX_PC_BUF_SEMAPHORE(7) / 4: {
-            uint32_t sem_index = (offset - TENSIX_PC_BUF_SEMAPHORE(0)) / 4;
+    TTSIM_ASSERT(!(offset & 3), "misaligned offset=0x%x", offset);
+    TENSIX_PC_BUF_SWITCH(offset) {
+        TENSIX_PC_BUF_TENSIX_SYNC_CASES() break;
+        TENSIX_PC_BUF_MOP_SYNC_CASES() break;
+        TENSIX_PC_BUF_SEMAPHORE_CASES() {
+            uint32_t sem_index = TENSIX_PC_BUF_SEMAPHORE_INDEX(offset);
             TTSIM_ASSERT(sem_index < std::size(p_tile->tensix[tensix_id].sem));
             TensixState *p_tensix = &p_tile->tensix[tensix_id];
             if (data == 1) {
@@ -2033,6 +1964,9 @@ static std::pair<TensixState *, uint32_t> tensix_mailbox_party(uint32_t tile_id,
 static std::pair<bool, uint32_t> tensix_mailbox_rd32(uint32_t tile_id, uint32_t riscv_id, uint32_t instance, uint32_t offset) {
     TTSIM_VERIFY(!offset, UnsupportedFunctionality, "offset=0x%x", offset);
     auto [p_tensix, reader] = tensix_mailbox_party(tile_id, riscv_id);
+    // The hardware forgets a read waiting at a writer held in soft reset, and the reader hangs
+    TTSIM_VERIFY(p_tensix->mailbox_has_data[instance][reader] || ttsim_rv32_get_core_active('T', tile_id, instance),
+        NonContractualBehavior, "mailbox %u to %u: read while the writer is in soft reset", instance, reader);
     if (!p_tensix->mailbox_has_data[instance][reader]) {
         return {false, 0};
     }
@@ -2052,6 +1986,7 @@ static bool tensix_mailbox_wr32(uint32_t tile_id, uint32_t riscv_id, uint32_t in
 }
 
 static uint32_t eth_txq_regs_rd32(uint32_t tile_id, uint32_t offset) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     EthTile *p_tile = &g_e_tiles[tile_id];
     uint32_t queue_id = offset / 0x1000;
     offset &= 0xFFF;
@@ -2067,6 +2002,7 @@ static uint32_t eth_txq_regs_rd32(uint32_t tile_id, uint32_t offset) {
 }
 
 static void eth_txq_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     EthTile *p_tile = &g_e_tiles[tile_id];
     uint32_t queue_id = offset / 0x1000;
     offset &= 0xFFF;
@@ -2081,11 +2017,11 @@ static void eth_txq_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) 
         case ETH_TXQ_CMD:
             eth_set_busy(p_tile);
 #if TT_ARCH_VERSION == 0
-            TTSIM_VERIFY(!p_tile->eth_txq_cmd[queue_id], AssertionFailure, "eth_txq_cmd=0x%x", p_tile->eth_txq_cmd[queue_id]);
+            TTSIM_ASSERT(!p_tile->eth_txq_cmd[queue_id], "eth_txq_cmd=0x%x", p_tile->eth_txq_cmd[queue_id]);
             TTSIM_VERIFY(p_tile->erisc_mac_0 == 0x30000001, UnsupportedFunctionality, "ERISC_MAC_0=0x%x", p_tile->erisc_mac_0);
             TTSIM_VERIFY(p_tile->erisc_mac_1 == 7, UnsupportedFunctionality, "ERISC_MAC_1=0x%x", p_tile->erisc_mac_1);
 #else
-            TTSIM_VERIFY(!p_tile->eth_txq_status[queue_id], AssertionFailure, "eth_txq_status=0x%x", p_tile->eth_txq_status[queue_id]);
+            TTSIM_ASSERT(!p_tile->eth_txq_status[queue_id], "eth_txq_status=0x%x", p_tile->eth_txq_status[queue_id]);
 #endif
             if (data == 2) {
                 uint32_t start_addr = p_tile->eth_txq_transfer_start_addr[queue_id];
@@ -2102,7 +2038,10 @@ static void eth_txq_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) 
                     "eth_txq_transfer_start_addr=0x%x eth_txq_transfer_size_bytes=0x%x", start_addr, size_bytes);
                 TTSIM_VERIFY(in_bounds(dest_addr, size_bytes, ETH_SRAM_SIZE), UndefinedBehavior,
                     "eth_txq_dest_addr=0x%x eth_txq_transfer_size_bytes=0x%x", dest_addr, size_bytes);
-                // eth_send_packet (ETH_TXQ_CMD_START_DATA): copy local L1 to the peer eth tile's L1
+                // eth_send_packet (ETH_TXQ_CMD_START_DATA): copy local L1 to the peer eth tile's L1. The source is read
+                // here, at the command. Blackhole reads it as each packet is sent, which can be well after CMD_ONGOING
+                // clears (behind earlier packets on the queue), and again for a resend, so a sender that rewrites the
+                // source before the receiver has acknowledged the data sends the new bytes there, never here.
                 uint32_t saved_chip_id = g_current_chip_id;
                 ttsim_select_chip(remote_chip_id);
                 eth_set_busy(&g_e_tiles[remote_tile_id]);
@@ -2154,11 +2093,9 @@ static void eth_txq_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) 
             TTSIM_VERIFY((data & 15) < ETH_NUM_TX_HEADER_TABLE_ENTRIES, UnsupportedFunctionality, "eth_txq_txpkt_cfg_sel_sw=0x%x", data);
             TTSIM_VERIFY(((data >> 4) & 15) < ETH_NUM_TX_HEADER_TABLE_ENTRIES, UnsupportedFunctionality, "eth_txq_txpkt_cfg_sel_sw=0x%x", data);
             TTSIM_VERIFY((data >> 8) < ETH_NUM_TX_HEADER_TABLE_ENTRIES, UnsupportedFunctionality, "eth_txq_txpkt_cfg_sel_sw=0x%x", data);
-            p_tile->eth_txq_txpkt_cfg_sel_sw[queue_id] = data;
             break;
         case ETH_TXQ_TXPKT_CFG_SEL_HW:
             TTSIM_VERIFY(data < ETH_NUM_TX_HEADER_TABLE_ENTRIES, UnsupportedFunctionality, "eth_txq_txpkt_cfg_sel_hw=0x%x", data);
-            p_tile->eth_txq_txpkt_cfg_sel_hw[queue_id] = data;
             break;
 #endif
         default:
@@ -2168,17 +2105,14 @@ static void eth_txq_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) 
 
 #if TT_ARCH_VERSION == 1
 static void eth_txpkt_cfg_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) {
-    EthTile *p_tile = &g_e_tiles[tile_id];
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     uint32_t header_entry = offset / 0x80;
     offset &= 0x7F;
     TTSIM_VERIFY(header_entry < ETH_NUM_TX_HEADER_TABLE_ENTRIES, UndefinedBehavior, "header_entry=%d", header_entry);
     switch (offset) {
-        case ETH_TXPKT_CFG_MAC_DA_LO:
-            p_tile->eth_txpkt_cfg_mac_da_lo[header_entry] = data;
-            break;
+        case ETH_TXPKT_CFG_MAC_DA_LO: break;
         case ETH_TXPKT_CFG_MAC_DA_HI:
             TTSIM_VERIFY(data <= 0xFFFF, UnsupportedFunctionality, "eth_txpkt_cfg_mac_da_hi=0x%x", data);
-            p_tile->eth_txpkt_cfg_mac_da_hi[header_entry] = data;
             break;
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
@@ -2187,6 +2121,7 @@ static void eth_txpkt_cfg_wr32(uint32_t tile_id, uint32_t offset, uint32_t data)
 #endif
 
 static uint32_t eth_rxq_regs_rd32(uint32_t tile_id, uint32_t offset) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     EthTile *p_tile = &g_e_tiles[tile_id];
     uint32_t queue_id = offset / 0x1000;
     offset &= 0xFFF;
@@ -2198,6 +2133,7 @@ static uint32_t eth_rxq_regs_rd32(uint32_t tile_id, uint32_t offset) {
 }
 
 static void eth_rxq_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     EthTile *p_tile = &g_e_tiles[tile_id];
     uint32_t queue_id = offset / 0x1000;
     offset &= 0xFFF;
@@ -2213,6 +2149,7 @@ static void eth_rxq_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) 
 }
 
 static uint32_t eth_ctrl_regs_rd32(uint32_t tile_id, uint32_t offset) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     EthTile *p_tile = &g_e_tiles[tile_id];
     switch (offset) {
 #if TT_ARCH_VERSION == 0
@@ -2227,6 +2164,7 @@ static uint32_t eth_ctrl_regs_rd32(uint32_t tile_id, uint32_t offset) {
 }
 
 static void eth_ctrl_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     EthTile *p_tile = &g_e_tiles[tile_id];
     switch (offset) {
 #if TT_ARCH_VERSION == 0
@@ -2242,7 +2180,6 @@ static void eth_ctrl_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data)
 #if TT_ARCH_VERSION == 1
         case ETH_CTRL_REGS_MAC_RX_ROUTING:
             TTSIM_VERIFY(!data, UnsupportedFunctionality, "mac_rx_routing=0x%x", data);
-            p_tile->eth_mac_rx_routing = data;
             break;
         case ETH_CTRL_REGS_MAC_RX_ADDR_ROUTING:
             p_tile->eth_mac_rx_addr_routing = data;
@@ -2255,6 +2192,7 @@ static void eth_ctrl_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data)
 
 #if TT_ARCH_VERSION == 0
 static void eth_mac_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) {
+    TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
     EthTile *p_tile = &g_e_tiles[tile_id];
     switch (offset) {
         case ETH_MAC_REGS_ERISC_MAC_0:
@@ -2505,7 +2443,7 @@ std::pair<bool, uint32_t> tile_mmio_rd32(char tile_type, uint32_t tile_id, uint3
     } else if (tile_type == 'E') {
         return {true, e_tile_mmio_rd32(tile_id, addr)};
     } else {
-        TTSIM_ERROR(AssertionFailure, "tile_type=%c", tile_type);
+        TTSIM_UNREACHABLE("tile_type=%c", tile_type);
     }
 }
 
@@ -2513,7 +2451,7 @@ std::pair<bool, uint64_t> tile_mmio_rd64(char tile_type, uint32_t tile_id, uint3
     if (tile_type == 'T') {
         return t_tile_mmio_rd64(tile_id, riscv_id, addr);
     } else {
-        TTSIM_ERROR(AssertionFailure, "tile_type=%c", tile_type);
+        TTSIM_UNREACHABLE("tile_type=%c", tile_type);
     }
 }
 
@@ -2523,7 +2461,7 @@ bool tile_mmio_wr32(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_
     } else if (tile_type == 'E') {
         return e_tile_mmio_wr32(tile_id, addr, data);
     } else {
-        TTSIM_ERROR(AssertionFailure, "tile_type=%c", tile_type);
+        TTSIM_UNREACHABLE("tile_type=%c", tile_type);
     }
 }
 
@@ -2531,7 +2469,7 @@ bool tile_mmio_wr64(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_
     if (tile_type == 'T') {
         return t_tile_mmio_wr64(tile_id, riscv_id, addr, data);
     } else {
-        TTSIM_ERROR(AssertionFailure, "tile_type=%c", tile_type);
+        TTSIM_UNREACHABLE("tile_type=%c", tile_type);
     }
 }
 
@@ -2584,28 +2522,24 @@ static uint64_t translate_pci_dma_addr(uint64_t addr, uint32_t size) {
 
 static uint32_t arc_reset_unit_rd32(uint32_t offset) {
     TTSIM_ASSERT(!(offset & 3));
-    switch (offset) {
+    RESET_UNIT_SWITCH(offset) {
+        RESET_UNIT_SCRATCH_CASES()
 #if TT_ARCH_VERSION == 0
-        case RESET_UNIT_SCRATCH(1):
-            TTSIM_ERROR(UndefinedBehavior, "scratch 1 is reserved");
-        case RESET_UNIT_SCRATCH(0):
-        case RESET_UNIT_SCRATCH(2) ... RESET_UNIT_SCRATCH(7):
-#else
-        case RESET_UNIT_SCRATCH(0) ... RESET_UNIT_SCRATCH(7):
+            TTSIM_VERIFY(RESET_UNIT_SCRATCH_INDEX(offset) != 1, UndefinedBehavior, "scratch 1 is reserved");
 #endif
-            return g_a_tile.reset_unit_scratch[(offset - RESET_UNIT_SCRATCH(0)) / 4];
-        case RESET_UNIT_ARC_MISC_CNTL:
+            return g_a_tile.reset_unit_scratch[RESET_UNIT_SCRATCH_INDEX(offset)];
+        RESET_UNIT_ARC_MISC_CNTL_CASES()
             return g_a_tile.arc_misc_cntl;
 #if TT_ARCH_VERSION == 0
-        case RESET_UNIT_NOC_NODEID_X_0:
+        RESET_UNIT_NOC_NODEID_X_0_CASES()
             return ARC_CSM_BASE + ARC_TELEMETRY_TABLE_CSM_OFFSET;
-        case RESET_UNIT_NOC_NODEID_Y_0:
+        RESET_UNIT_NOC_NODEID_Y_0_CASES()
             return ARC_CSM_BASE + ARC_TELEMETRY_VALUES_CSM_OFFSET;
-        case RESET_UNIT_ARC_MSG_QCB_PTR:
+        RESET_UNIT_ARC_MSG_QCB_PTR_CASES()
             return 0; // indicates firmware does not support ARC msg queue
 #elif TT_ARCH_VERSION == 1
-        case RESET_UNIT_SCRATCH_RAM(0) ... RESET_UNIT_SCRATCH_RAM(15):
-            return g_a_tile.scratch_ram[(offset - RESET_UNIT_SCRATCH_RAM(0)) / 4];
+        RESET_UNIT_SCRATCH_RAM_CASES()
+            return g_a_tile.scratch_ram[RESET_UNIT_SCRATCH_RAM_INDEX(offset)];
 #endif
         default:
             TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
@@ -2727,23 +2661,19 @@ static void arc_process_message_queue() {
 
 static void arc_reset_unit_wr32(uint32_t offset, uint32_t value) {
     TTSIM_ASSERT(!(offset & 3));
-    switch (offset) {
+    RESET_UNIT_SWITCH(offset) {
+        RESET_UNIT_SCRATCH_CASES()
 #if TT_ARCH_VERSION == 0
-        case RESET_UNIT_SCRATCH(1):
-            TTSIM_ERROR(UndefinedBehavior, "scratch 1 is reserved");
-        case RESET_UNIT_SCRATCH(0):
-        case RESET_UNIT_SCRATCH(2) ... RESET_UNIT_SCRATCH(7):
-#else
-        case RESET_UNIT_SCRATCH(0) ... RESET_UNIT_SCRATCH(7):
+            TTSIM_VERIFY(RESET_UNIT_SCRATCH_INDEX(offset) != 1, UndefinedBehavior, "scratch 1 is reserved");
 #endif
-            g_a_tile.reset_unit_scratch[(offset - RESET_UNIT_SCRATCH(0)) / 4] = value;
+            g_a_tile.reset_unit_scratch[RESET_UNIT_SCRATCH_INDEX(offset)] = value;
             break;
 #if TT_ARCH_VERSION == 1
-        case RESET_UNIT_SCRATCH_RAM(0) ... RESET_UNIT_SCRATCH_RAM(15):
-            g_a_tile.scratch_ram[(offset - RESET_UNIT_SCRATCH_RAM(0)) / 4] = value;
+        RESET_UNIT_SCRATCH_RAM_CASES()
+            g_a_tile.scratch_ram[RESET_UNIT_SCRATCH_RAM_INDEX(offset)] = value;
             break;
 #endif
-        case RESET_UNIT_ARC_MISC_CNTL:
+        RESET_UNIT_ARC_MISC_CNTL_CASES()
             g_a_tile.arc_misc_cntl = value;
             if (value & ARC_MISC_CNTL_IRQ0) {
 #if TT_ARCH_VERSION == 0
@@ -2888,6 +2818,16 @@ void tile_rd_bytes(uint32_t coord, uint64_t addr, void *p, uint32_t size) {
             mem_wr<uint32_t>(p, noc_node_id(noc_instance, coord));
             return;
         }
+#elif TT_ARCH_VERSION == 1
+        // The top 16 MiB below 4 GiB is the NIU register range, not GDDR; the address page picks the NIU
+        if ((addr >= DRAM_CHANNEL_SIZE) && (addr < 0x100000000ull)) {
+            bool node_id_0 = (addr == NOC0_REGS_BASE + NOC_REGS_NOC_NODE_ID);
+            bool node_id_1 = (addr == NOC1_REGS_BASE + NOC_REGS_NOC_NODE_ID);
+            TTSIM_VERIFY((node_id_0 || node_id_1) && (size == 4), UnimplementedFunctionality,
+                "dram niu addr=0x%llx size=%d", addr, size);
+            mem_wr<uint32_t>(p, noc_node_id(node_id_1, coord));
+            return;
+        }
 #endif
         TTSIM_VERIFY(in_bounds(addr, size, DRAM_CHANNEL_SIZE), UndefinedBehavior, "DRAM read overrun");
         memcpy(p, &g_dram[tile_id].p_mem[addr], size);
@@ -2912,11 +2852,11 @@ void tile_rd_bytes(uint32_t coord, uint64_t addr, void *p, uint32_t size) {
         } else {
             TTSIM_VERIFY(size == 8, UnsupportedFunctionality, "tile=%c%d addr=0x%llx size=%d", tile_type, tile_id, addr, size);
             auto [done, data] = t_tile_mmio_rd64(tile_id, 0xFFFFFFFF, addr); // no riscv_id in this path
-            TTSIM_VERIFY(done, AssertionFailure, "t_tile_mmio_rd64 failed: addr=0x%llx", addr);
+            TTSIM_ASSERT(done, "t_tile_mmio_rd64 failed: addr=0x%llx", addr);
             mem_wr<uint64_t>(p, data);
         }
     } else if (tile_type == 'P') {
-        TTSIM_VERIFY(!tile_id, AssertionFailure, "tile=%c%d", tile_type, tile_id);
+        TTSIM_ASSERT(!tile_id, "tile=%c%d", tile_type, tile_id);
 #if TT_ARCH_VERSION == 1
         if ((addr >= PCIE_DBI_BASE) && (addr <= PCIE_DBI_LIMIT)) {
             TTSIM_VERIFY((size == 4) && !(addr & 3), UndefinedBehavior, "pcie_dbi: addr=0x%llx size=%d", addr, size);
@@ -2932,10 +2872,10 @@ void tile_rd_bytes(uint32_t coord, uint64_t addr, void *p, uint32_t size) {
 #endif
         libttsim_pci_dma_mem_rd_bytes(translate_pci_dma_addr(addr, size), p, size);
     } else if (tile_type == 'A') {
-        TTSIM_VERIFY(!tile_id, AssertionFailure, "tile=%c%d", tile_type, tile_id);
+        TTSIM_ASSERT(!tile_id, "tile=%c%d", tile_type, tile_id);
         arc_tile_rd_bytes(addr, p, size);
     } else {
-        TTSIM_ERROR(AssertionFailure, "tile_type=%c", tile_type);
+        TTSIM_UNREACHABLE("tile_type=%c", tile_type);
     }
 }
 
@@ -2964,7 +2904,7 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
                 if ((data == 1) && (old_data != 1)) { // Start active erisc core
                     g_e_tiles[tile_id].rv32[0].pc = 0x9040; // FIRMWARE_BASE
                     g_e_tiles[tile_id].rv32[0].x_regs[1] = g_e_tiles[tile_id].ierisc_reset_pc;
-                    g_e_tiles[tile_id].rv32[0].x_regs[2] = 0xFFB01000;
+                    g_e_tiles[tile_id].rv32[0].x_regs[2] = RISCV_LOCAL_MEM_LIMIT + 1; // sp: the top of local memory
                     ttsim_rv32_set_core_active('E', tile_id, 0, true);
                 } else if ((data == 0) && (old_data == 1)) { // Stop active erisc core
                     ttsim_rv32_set_core_active('E', tile_id, 0, false);
@@ -2984,7 +2924,7 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
         }
         TTSIM_VERIFY(size == 4, UnimplementedFunctionality, "tile=%c%d addr=0x%llx size=%d", tile_type, tile_id, addr, size);
         bool done = e_tile_mmio_wr32(tile_id, addr, mem_rd<uint32_t>(p));
-        TTSIM_VERIFY(done, AssertionFailure, "e_tile_mmio_wr32 failed: addr=0x%llx", addr);
+        TTSIM_ASSERT(done, "e_tile_mmio_wr32 failed: addr=0x%llx", addr);
     } else if (tile_type == 'T') {
         if (addr < sizeof(g_t_tiles[tile_id].sram)) {
             TTSIM_VERIFY(in_bounds(addr, size, sizeof(g_t_tiles[tile_id].sram)), UndefinedBehavior, "access past end of tensix_sram");
@@ -2997,10 +2937,10 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
         } else {
             TTSIM_VERIFY(size == 8, UnsupportedFunctionality, "tile=%c%d addr=0x%llx size=%d", tile_type, tile_id, addr, size);
             bool done = t_tile_mmio_wr64(tile_id, 0xFFFFFFFF, addr, mem_rd<uint64_t>(p)); // no riscv_id in this path
-            TTSIM_VERIFY(done, AssertionFailure, "t_tile_mmio_wr64 failed: addr=0x%llx", addr);
+            TTSIM_ASSERT(done, "t_tile_mmio_wr64 failed: addr=0x%llx", addr);
         }
     } else if (tile_type == 'P') {
-        TTSIM_VERIFY(!tile_id, AssertionFailure, "tile=%c%d", tile_type, tile_id);
+        TTSIM_ASSERT(!tile_id, "tile=%c%d", tile_type, tile_id);
 #if TT_ARCH_VERSION == 1
         if ((addr >= PCIE_DBI_BASE) && (addr <= PCIE_DBI_LIMIT)) {
             TTSIM_VERIFY((size == 4) && !(addr & 3), UndefinedBehavior, "pcie_dbi: addr=0x%llx size=%d", addr, size);
@@ -3016,9 +2956,9 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
 #endif
         libttsim_pci_dma_mem_wr_bytes(translate_pci_dma_addr(addr, size), p, size);
     } else if (tile_type == 'A') {
-        TTSIM_VERIFY(!tile_id, AssertionFailure, "tile=%c%d", tile_type, tile_id);
+        TTSIM_ASSERT(!tile_id, "tile=%c%d", tile_type, tile_id);
         arc_tile_wr_bytes(addr, p, size);
     } else {
-        TTSIM_ERROR(AssertionFailure, "tile_type=%c", tile_type);
+        TTSIM_UNREACHABLE("tile_type=%c", tile_type);
     }
 }

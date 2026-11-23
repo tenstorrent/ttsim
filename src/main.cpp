@@ -30,7 +30,7 @@ static uint32_t parse_u32(const char *s) {
     return uint32_t(v);
 }
 
-static uint64_t load_bin(RvSystem *sys, const char *path, uint64_t addr) {
+static void load_bin(RvSystem *sys, const char *path, uint64_t addr) {
     FILE *f = fopen(path, "rb");
     TTSIM_VERIFY(f, ConfigurationError, "cannot open --load-bin file '%s'", path);
     TTSIM_VERIFY(fseek(f, 0, SEEK_END) == 0, ConfigurationError, "cannot seek --load-bin file '%s'", path);
@@ -47,7 +47,6 @@ static uint64_t load_bin(RvSystem *sys, const char *path, uint64_t addr) {
         off += n;
     }
     fclose(f);
-    return off;
 }
 
 int main(int argc, char **argv) {
@@ -169,7 +168,7 @@ int main(int argc, char **argv) {
     }
 
     for (uint32_t k = 0; k < num_loads; k++) {
-        [[maybe_unused]] uint64_t sz = load_bin(sys, loads[k].path, loads[k].addr);
+        load_bin(sys, loads[k].path, loads[k].addr);
     }
     h0->x_regs[10] = init_a0;
     h0->x_regs[11] = init_a1;

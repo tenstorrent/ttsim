@@ -35,6 +35,7 @@
 #define CSR_PMPCFG0       0x3A0
 #define CSR_PMPADDR0      0x3B0
 #define CSR_CFG0          0x7C0
+#define CSR_TIMEOUT_COUNT 0xBD0
 #define CSR_CYCLE         0xC00
 #define CSR_TIME          0xC01
 #define CSR_INSTRET       0xC02
@@ -43,6 +44,10 @@
 #define CSR_MIMPID        0xF13
 #define CSR_MHARTID       0xF14
 #define CSR_MCONFIGPTR    0xF15
+
+// Baby RISC-V cfg0 (CSR_CFG0) fields, BH and later (chicken_bits)
+#define CHICKEN_DIS_LOWCASH 0x8 // bit 3 (DisLowCash): SW disables the lowcash
+#define CHICKEN_DIS_TRISC_CACHE 0x40000 // bit 18 (DisTriscCache): SW turns off TRISC TTI gathering
 
 #define PRIV_U 0
 #define PRIV_S 1

@@ -87,7 +87,7 @@ void RV_XLEN_PREFIX(init)(RiscvHartState *p_hart, char tile_type, uint32_t tile_
     p_hart->riscv_id = riscv_id;
 #if XLEN == 64
     p_hart->riscv_id |= 0x80000000; // so that fabrics can distinguish type of core initiating request
-    p_hart->mstatus = 3ull << 11; // MPP=3, most other bits not relevant with U/S/H unsupported
+    p_hart->mstatus = MSTATUS_MPP; // MPP=3, most other bits not relevant with U/S/H unsupported
 #elif TT_ARCH_VERSION >= 1
     p_hart->chicken_bits = 0x20000; // StMergeTimer=16
 #endif
@@ -104,12 +104,12 @@ void RV_XLEN_PREFIX(init)(RiscvHartState *p_hart, char tile_type, uint32_t tile_
             case RV32_ID_TRISC1: p_hart->local_mem_size = TRISC_LOCAL_MEM_SIZE; break;
             case RV32_ID_TRISC2: p_hart->local_mem_size = TRISC_LOCAL_MEM_SIZE; break;
             case RV32_ID_NCRISC: p_hart->local_mem_size = NCRISC_LOCAL_MEM_SIZE; break;
-            default: TTSIM_ERROR(AssertionFailure, "riscv_id=%d", riscv_id);
+            default: TTSIM_UNREACHABLE("riscv_id=%d", riscv_id);
         }
         TTSIM_ASSERT(p_hart->local_mem_size <= sizeof(g_t_tiles[tile_id].rv32_local_ram[riscv_id]));
 #endif
     } else {
-        TTSIM_VERIFY(tile_type == 'E', AssertionFailure, "tile_type=%c", tile_type);
+        TTSIM_ASSERT(tile_type == 'E', "tile_type=%c", tile_type);
 #if XLEN == 32
         p_hart->p_sram = g_e_tiles[tile_id].sram;
         p_hart->sram_size = sizeof(g_e_tiles[tile_id].sram);
@@ -117,7 +117,7 @@ void RV_XLEN_PREFIX(init)(RiscvHartState *p_hart, char tile_type, uint32_t tile_
         p_hart->local_mem_base = RISCV_LOCAL_MEM_BASE;
         p_hart->local_mem_size = sizeof(g_e_tiles[tile_id].rv32_local_ram[riscv_id]);
 #else
-        TTSIM_ERROR(AssertionFailure, "eth cores should only be rv32");
+        TTSIM_UNREACHABLE("eth cores should only be rv32");
 #endif
     }
 
@@ -642,6 +642,9 @@ template<class T> static bool RV_XLEN_PREFIX(mem_rd)(RiscvHartState *p_hart, uin
     return rv64_sys_load(p_hart, addr, p_data, size);
 #else
     TTSIM_VERIFY(!(addr & (size - 1)), NonContractualBehavior, "unaligned addr=0x%llx size=%d", uint64_t(addr), size);
+    // Not checked: ttsim models no cache contents, so a load from L1 reads what L1 holds now. On Blackhole a BRISC
+    // load that hits its lowcash (when enabled) can return the line as it was before a NoC write into it (an
+    // atomic's returned value included), until a fence.
     if (addr < p_hart->sram_size) {
         dcache_access(p_hart, addr, false);
         *p_data = mem_rd<T>(&p_hart->p_sram[addr]);
@@ -1178,8 +1181,8 @@ static void RV_XLEN_PREFIX(ecall_ebreak)(RiscvHartState *p_hart, uint32_t inst) 
     } else if (inst == 0x30200073) { // MRET
         p_hart->pc = p_hart->mepc;
         // MIE takes MPIE back, and MPIE is left set; MPP stays at machine mode, the only one there is
-        p_hart->mstatus = (p_hart->mstatus & ~uint64_t(0x8)) | ((p_hart->mstatus >> 4) & 0x8) | 0x80;
-        rocc_interrupt_update(p_hart->tile_id, p_hart->riscv_id);
+        p_hart->mstatus = (p_hart->mstatus & ~MSTATUS_MIE) | ((p_hart->mstatus >> 4) & MSTATUS_MIE) | MSTATUS_MPIE;
+        dm_interrupt_update(p_hart->tile_id, p_hart->riscv_id);
     } else if ((inst & 0xFFF07FFF) == 0xFC000073) { // tt.cache.cflush.d.l1
         // Writes back and invalidates entire L1 D$ (rs1 = x0) or one line; this is a nop in this simulator
     } else if ((inst & 0xFFF07FFF) == 0xFC200073) { // tt.cache.cdiscard.d.l1
@@ -1219,16 +1222,17 @@ static void write_csr(RiscvHartState *p_hart, uint32_t csr, uint_xlen_t data) {
         case CSR_MSTATUS:
             // Only the interrupt-enable stack and the previous privilege are meaningful here: with
             // U/S/H unsupported there is nothing else in the register to drive.
-            TTSIM_VERIFY(!(data & ~uint64_t(0x1888)), UnimplementedFunctionality, "mstatus: data=0x%llx", data);
-            TTSIM_VERIFY((data & 0x1800) == 0x1800, UnimplementedFunctionality, "mstatus: data=0x%llx", data);
+            TTSIM_VERIFY(!(data & ~(MSTATUS_MPP | MSTATUS_MPIE | MSTATUS_MIE)), UnimplementedFunctionality,
+                "mstatus: data=0x%llx", data);
+            TTSIM_VERIFY((data & MSTATUS_MPP) == MSTATUS_MPP, UnimplementedFunctionality, "mstatus: data=0x%llx", data);
             p_hart->mstatus = data;
-            rocc_interrupt_update(p_hart->tile_id, p_hart->riscv_id);
+            dm_interrupt_update(p_hart->tile_id, p_hart->riscv_id);
             break;
         case CSR_MIE:
-            // Only the line the tile's RoCC block raises: the other sources have no model yet.
-            TTSIM_VERIFY(!(data & ~(uint64_t(1) << ROCC_INTERRUPT_INDEX)), UnimplementedFunctionality, "mie: data=0x%llx", data);
+            // The line the tile's RoCC block raises, and the machine external interrupt from the DM cluster's PLIC
+            TTSIM_VERIFY(!(data & ~((uint64_t(1) << ROCC_INTERRUPT_INDEX) | MIP_MEIP)), UnimplementedFunctionality, "mie: data=0x%llx", data);
             p_hart->mie = data;
-            rocc_interrupt_update(p_hart->tile_id, p_hart->riscv_id);
+            dm_interrupt_update(p_hart->tile_id, p_hart->riscv_id);
             break;
         case CSR_MEPC:
             p_hart->mepc = data;
@@ -1247,7 +1251,7 @@ static void write_csr(RiscvHartState *p_hart, uint32_t csr, uint_xlen_t data) {
 #if TT_ARCH_VERSION == 1
             TTSIM_VERIFY(!(data & ~0x106000A), UnsupportedFunctionality, "chicken_bits: data=0x%x", data);
 #else
-            TTSIM_VERIFY(!(data & ~0x60009), UnimplementedFunctionality, "chicken_bits: data=0x%x", data);
+            TTSIM_VERIFY(!(data & ~0x1060009), UnimplementedFunctionality, "chicken_bits: data=0x%x", data);
 #endif
             p_hart->chicken_bits = data;
             break;
@@ -1492,8 +1496,9 @@ static void RV_XLEN_PREFIX(tti)(RiscvHartState *p_hart, uint32_t inst) {
         // With gathering on, a TRISC can push adjacent TTIs in one store, and a REPLAY recording without Exec that takes
         // such a store loses count of the thread's instructions; ttsim does not model gathering, so it refuses them all
         TTSIM_VERIFY(bypass_mop_expander || !p_tensix->replay_left[pipe] || p_tensix->replay_execute_while_loading[pipe] ||
-            (p_hart->chicken_bits & (1u << 18)), UnsupportedFunctionality, "TTI inst=0x%x recorded by a REPLAY without "
-            "Exec while gathering is on; set cfg0 bit 18 (DisTriscCache) before recording", tensix_inst);
+            (p_hart->chicken_bits & CHICKEN_DIS_TRISC_CACHE), UnsupportedFunctionality,
+            "TTI inst=0x%x recorded by a REPLAY without Exec while gathering is on; set cfg0 bit 18 (DisTriscCache) before "
+            "recording", tensix_inst);
 #endif
         tensix_push_inst(p_tensix, pipe, tensix_inst, bypass_mop_expander);
     } else {

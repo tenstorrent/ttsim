@@ -46,7 +46,7 @@ static inline uint32_t hostfp_round_bits(uint32_t rm) {
         case 2: return 1u << 13; // RDN
         case 3: return 2u << 13; // RUP
         case 4: return 0u << 13; // RMM: RNE, then rmm() rounds ties away
-        default: TTSIM_ERROR(AssertionFailure, "fp-rm=%u", rm);
+        default: TTSIM_UNREACHABLE("fp-rm=%u", rm);
     }
 }
 
@@ -63,21 +63,11 @@ static __attribute__((noinline)) uint32_t fp_end_flags() {
     uint32_t e = hostfp_status_read();
     hostfp_status_write(s_saved_mxcsr);
     uint32_t f = 0;
-    if (e & (1u << 0)) {
-        f |= 1u << 4; // IE -> NV
-    }
-    if (e & (1u << 2)) {
-        f |= 1u << 3; // ZE -> DZ
-    }
-    if (e & (1u << 3)) {
-        f |= 1u << 2; // OE -> OF
-    }
-    if (e & (1u << 4)) {
-        f |= 1u << 1; // UE -> UF
-    }
-    if (e & (1u << 5)) {
-        f |= 1u << 0; // PE -> NX
-    }
+    f |= (e & (1u << 0)) ? FFLAG_NV : 0; // IE
+    f |= (e & (1u << 2)) ? FFLAG_DZ : 0; // ZE
+    f |= (e & (1u << 3)) ? FFLAG_OF : 0; // OE
+    f |= (e & (1u << 4)) ? FFLAG_UF : 0; // UE
+    f |= (e & (1u << 5)) ? FFLAG_NX : 0; // PE
     return f;
 }
 
@@ -128,7 +118,7 @@ static inline uint64_t hostfp_round_bits(uint32_t rm) {
         case 2: return 2ull << 22; // RDN
         case 3: return 1ull << 22; // RUP
         case 4: return 0ull << 22; // RMM: RNE, then rmm() rounds ties away
-        default: TTSIM_ERROR(AssertionFailure, "fp-rm=%u", rm);
+        default: TTSIM_UNREACHABLE("fp-rm=%u", rm);
     }
 }
 
@@ -147,21 +137,11 @@ static __attribute__((noinline)) uint32_t fp_end_flags() {
     hostfp_fpcr_write(s_saved_fpcr);
     hostfp_fpsr_write(s_saved_fpsr);
     uint32_t f = 0;
-    if (e & (1u << 0)) {
-        f |= 1u << 4; // IOC -> NV
-    }
-    if (e & (1u << 1)) {
-        f |= 1u << 3; // DZC -> DZ
-    }
-    if (e & (1u << 2)) {
-        f |= 1u << 2; // OFC -> OF
-    }
-    if (e & (1u << 3)) {
-        f |= 1u << 1; // UFC -> UF
-    }
-    if (e & (1u << 4)) {
-        f |= 1u << 0; // IXC -> NX
-    }
+    f |= (e & (1u << 0)) ? FFLAG_NV : 0; // IOC
+    f |= (e & (1u << 1)) ? FFLAG_DZ : 0; // DZC
+    f |= (e & (1u << 2)) ? FFLAG_OF : 0; // OFC
+    f |= (e & (1u << 3)) ? FFLAG_UF : 0; // UFC
+    f |= (e & (1u << 4)) ? FFLAG_NX : 0; // IXC
     return f;
 }
 
@@ -192,7 +172,6 @@ static inline double fp_sqrt_d(double a) {
 #else
 
 #include <cfenv>
-#include <cmath>
 
 static fenv_t s_saved_fenv;
 
@@ -203,7 +182,7 @@ static inline int hostfp_round_mode(uint32_t rm) {
         case 2: return FE_DOWNWARD;
         case 3: return FE_UPWARD;
         case 4: return FE_TONEAREST; // RMM: RNE, then rmm() rounds ties away
-        default: TTSIM_ERROR(AssertionFailure, "fp-rm=%u", rm);
+        default: TTSIM_UNREACHABLE("fp-rm=%u", rm);
     }
 }
 
@@ -217,21 +196,11 @@ static __attribute__((noinline)) uint32_t fp_end_flags() {
     int e = fetestexcept(FE_ALL_EXCEPT);
     fesetenv(&s_saved_fenv);
     uint32_t f = 0;
-    if (e & FE_INVALID) {
-        f |= 1u << 4;
-    }
-    if (e & FE_DIVBYZERO) {
-        f |= 1u << 3;
-    }
-    if (e & FE_OVERFLOW) {
-        f |= 1u << 2;
-    }
-    if (e & FE_UNDERFLOW) {
-        f |= 1u << 1;
-    }
-    if (e & FE_INEXACT) {
-        f |= 1u << 0;
-    }
+    f |= (e & FE_INVALID) ? FFLAG_NV : 0;
+    f |= (e & FE_DIVBYZERO) ? FFLAG_DZ : 0;
+    f |= (e & FE_OVERFLOW) ? FFLAG_OF : 0;
+    f |= (e & FE_UNDERFLOW) ? FFLAG_UF : 0;
+    f |= (e & FE_INEXACT) ? FFLAG_NX : 0;
     return f;
 }
 
@@ -248,6 +217,28 @@ static inline double fp_sqrt_d(double a) {
     return __builtin_sqrt(a);
 }
 #endif
+
+// fp_begin() sets the host rounding mode and fp_end_flags() reads the host flags, but nothing else ties a host FP
+// operation between them: compilers move register-only arithmetic across the calls (-frounding-math doesn't stop
+// them) and compute both arms of a select. So each operation takes pinned operands and its result is pinned (an empty
+// asm the compiler can't move or speculate), and exactly one runs per window: a - b is computed as a + -b, which IEEE
+// 754 defines it to be, and a conversion picked by a select pins its input inside its arm.
+template<class T> static inline T fp_pin(T v) {
+    if constexpr (std::is_integral_v<T>) {
+        asm volatile("" : "+r"(v));
+    } else {
+#if defined(__x86_64__)
+        asm volatile("" : "+x"(v));
+#elif defined(__aarch64__)
+        asm volatile("" : "+w"(v));
+#elif defined(__riscv) && defined(__riscv_d)
+        asm volatile("" : "+f"(v));
+#else
+        asm volatile("" : "+m"(v));
+#endif
+    }
+    return v;
+}
 
 // RISC-V rounding modes (frm / inst rm field).
 enum {
@@ -408,26 +399,28 @@ template<class F> static F rmm(F r, uint32_t fl, Dyadic x0, Dyadic x1 = {}, Dyad
 
 static uint32_t hostfp_add_s(uint32_t a, uint32_t b, uint32_t rm, uint32_t *fl, bool sub) {
     float fa = std::bit_cast<float>(a), fb = std::bit_cast<float>(b);
+    float nb = sub ? -fb : fb;
     fp_begin(rm);
-    float r = sub ? fa - fb : fa + fb;
+    float r = fp_pin(fp_pin(fa) + fp_pin(nb));
     *fl |= fp_end_flags();
-    r = (rm == RV_RMM) ? rmm(r, *fl, dyadic(fa), dyadic(sub ? -fb : fb)) : r;
+    r = (rm == RV_RMM) ? rmm(r, *fl, dyadic(fa), dyadic(nb)) : r;
     return hostfp_result_s(r);
 }
 
 static uint64_t hostfp_add_d(uint64_t a, uint64_t b, uint32_t rm, uint32_t *fl, bool sub) {
     double fa = std::bit_cast<double>(a), fb = std::bit_cast<double>(b);
+    double nb = sub ? -fb : fb;
     fp_begin(rm);
-    double r = sub ? fa - fb : fa + fb;
+    double r = fp_pin(fp_pin(fa) + fp_pin(nb));
     *fl |= fp_end_flags();
-    r = (rm == RV_RMM) ? rmm(r, *fl, dyadic(fa), dyadic(sub ? -fb : fb)) : r;
+    r = (rm == RV_RMM) ? rmm(r, *fl, dyadic(fa), dyadic(nb)) : r;
     return hostfp_result_d(r);
 }
 
 static uint32_t hostfp_mul_s(uint32_t a, uint32_t b, uint32_t rm, uint32_t *fl) {
     float fa = std::bit_cast<float>(a), fb = std::bit_cast<float>(b);
     fp_begin(rm);
-    float r = fa * fb;
+    float r = fp_pin(fp_pin(fa) * fp_pin(fb));
     *fl |= fp_end_flags();
     r = (rm == RV_RMM) ? rmm(r, *fl, dmul(dyadic(fa), dyadic(fb))) : r;
     return hostfp_result_s(r);
@@ -436,7 +429,7 @@ static uint32_t hostfp_mul_s(uint32_t a, uint32_t b, uint32_t rm, uint32_t *fl) 
 static uint64_t hostfp_mul_d(uint64_t a, uint64_t b, uint32_t rm, uint32_t *fl) {
     double fa = std::bit_cast<double>(a), fb = std::bit_cast<double>(b);
     fp_begin(rm);
-    double r = fa * fb;
+    double r = fp_pin(fp_pin(fa) * fp_pin(fb));
     *fl |= fp_end_flags();
     r = (rm == RV_RMM) ? rmm(r, *fl, dmul(dyadic(fa), dyadic(fb))) : r;
     return hostfp_result_d(r);
@@ -445,7 +438,7 @@ static uint64_t hostfp_mul_d(uint64_t a, uint64_t b, uint32_t rm, uint32_t *fl) 
 static uint32_t hostfp_div_s(uint32_t a, uint32_t b, uint32_t rm, uint32_t *fl) {
     float fa = std::bit_cast<float>(a), fb = std::bit_cast<float>(b);
     fp_begin(rm);
-    float r = fa / fb;
+    float r = fp_pin(fp_pin(fa) / fp_pin(fb));
     *fl |= fp_end_flags();
     r = (rm == RV_RMM) ? rmm(r, *fl, dyadic(fa), {}, dyadic(fb)) : r;
     return hostfp_result_s(r);
@@ -454,7 +447,7 @@ static uint32_t hostfp_div_s(uint32_t a, uint32_t b, uint32_t rm, uint32_t *fl) 
 static uint64_t hostfp_div_d(uint64_t a, uint64_t b, uint32_t rm, uint32_t *fl) {
     double fa = std::bit_cast<double>(a), fb = std::bit_cast<double>(b);
     fp_begin(rm);
-    double r = fa / fb;
+    double r = fp_pin(fp_pin(fa) / fp_pin(fb));
     *fl |= fp_end_flags();
     r = (rm == RV_RMM) ? rmm(r, *fl, dyadic(fa), {}, dyadic(fb)) : r;
     return hostfp_result_d(r);
@@ -463,7 +456,7 @@ static uint64_t hostfp_div_d(uint64_t a, uint64_t b, uint32_t rm, uint32_t *fl) 
 static uint32_t hostfp_sqrt_s(uint32_t a, uint32_t rm, uint32_t *fl) {
     float fa = std::bit_cast<float>(a);
     fp_begin(rm);
-    float r = fp_sqrt_s(fa);
+    float r = fp_pin(fp_sqrt_s(fp_pin(fa)));
     *fl |= fp_end_flags();
     return hostfp_result_s(r);
 }
@@ -471,7 +464,7 @@ static uint32_t hostfp_sqrt_s(uint32_t a, uint32_t rm, uint32_t *fl) {
 static uint64_t hostfp_sqrt_d(uint64_t a, uint32_t rm, uint32_t *fl) {
     double fa = std::bit_cast<double>(a);
     fp_begin(rm);
-    double r = fp_sqrt_d(fa);
+    double r = fp_pin(fp_sqrt_d(fp_pin(fa)));
     *fl |= fp_end_flags();
     return hostfp_result_d(r);
 }
@@ -479,7 +472,7 @@ static uint64_t hostfp_sqrt_d(uint64_t a, uint32_t rm, uint32_t *fl) {
 static uint32_t hostfp_fma_s(uint32_t a, uint32_t b, uint32_t c, uint32_t rm, uint32_t *fl) {
     float fa = std::bit_cast<float>(a), fb = std::bit_cast<float>(b), fc = std::bit_cast<float>(c);
     fp_begin(rm);
-    float r = fp_fma_s(fa, fb, fc);
+    float r = fp_pin(fp_fma_s(fp_pin(fa), fp_pin(fb), fp_pin(fc)));
     *fl |= fp_end_flags();
     // Inf * 0 is invalid even with a quiet NaN addend, which x86 doesn't flag
     *fl |= ((SF32::is_inf(a) && SF32::is_zero(b)) || (SF32::is_zero(a) && SF32::is_inf(b))) ? FFLAG_NV : 0;
@@ -490,7 +483,7 @@ static uint32_t hostfp_fma_s(uint32_t a, uint32_t b, uint32_t c, uint32_t rm, ui
 static uint64_t hostfp_fma_d(uint64_t a, uint64_t b, uint64_t c, uint32_t rm, uint32_t *fl) {
     double fa = std::bit_cast<double>(a), fb = std::bit_cast<double>(b), fc = std::bit_cast<double>(c);
     fp_begin(rm);
-    double r = fp_fma_d(fa, fb, fc);
+    double r = fp_pin(fp_fma_d(fp_pin(fa), fp_pin(fb), fp_pin(fc)));
     *fl |= fp_end_flags();
     // Inf * 0 is invalid even with a quiet NaN addend, which x86 doesn't flag
     *fl |= ((SF64::is_inf(a) && SF64::is_zero(b)) || (SF64::is_zero(a) && SF64::is_inf(b))) ? FFLAG_NV : 0;
@@ -501,7 +494,7 @@ static uint64_t hostfp_fma_d(uint64_t a, uint64_t b, uint64_t c, uint32_t rm, ui
 static uint32_t hostfp_cvt_s_d(uint64_t d, uint32_t rm, uint32_t *fl) { // FCVT.S.D : double -> single
     double x = std::bit_cast<double>(d);
     fp_begin(rm);
-    float r = float(x);
+    float r = fp_pin(float(fp_pin(x)));
     *fl |= fp_end_flags();
     r = (rm == RV_RMM) ? rmm(r, *fl, dyadic(x)) : r;
     return hostfp_result_s(r);
@@ -510,7 +503,7 @@ static uint32_t hostfp_cvt_s_d(uint64_t d, uint32_t rm, uint32_t *fl) { // FCVT.
 static uint64_t hostfp_cvt_d_s(uint32_t f, uint32_t rm, uint32_t *fl) { // FCVT.D.S : single -> double
     float x = std::bit_cast<float>(f);
     fp_begin(rm);
-    double r = double(x);
+    double r = fp_pin(double(fp_pin(x)));
     *fl |= fp_end_flags();
     return hostfp_result_d(r);
 }
@@ -561,8 +554,8 @@ static uint32_t hostfp_from_int_s(uint64_t xr, uint32_t r2, uint32_t rm, uint32_
         return std::bit_cast<uint32_t>(from_int_rmm<float, 24>(xr, r2, fl));
     }
     fp_begin(rm);
-    float r = (r2 == 0) ? float(int32_t(xr)) : (r2 == 1) ? float(uint32_t(xr))
-            : (r2 == 2) ? float(int64_t(xr)) : float(uint64_t(xr));
+    float r = fp_pin((r2 == 0) ? float(int32_t(fp_pin(xr))) : (r2 == 1) ? float(uint32_t(fp_pin(xr)))
+            : (r2 == 2) ? float(int64_t(fp_pin(xr))) : float(fp_pin(xr)));
     *fl |= fp_end_flags();
     return std::bit_cast<uint32_t>(r);
 }
@@ -572,8 +565,8 @@ static uint64_t hostfp_from_int_d(uint64_t xr, uint32_t r2, uint32_t rm, uint32_
         return std::bit_cast<uint64_t>(from_int_rmm<double, 53>(xr, r2, fl));
     }
     fp_begin(rm);
-    double r = (r2 == 0) ? double(int32_t(xr)) : (r2 == 1) ? double(uint32_t(xr))
-             : (r2 == 2) ? double(int64_t(xr)) : double(uint64_t(xr));
+    double r = fp_pin((r2 == 0) ? double(int32_t(fp_pin(xr))) : (r2 == 1) ? double(uint32_t(fp_pin(xr)))
+             : (r2 == 2) ? double(int64_t(fp_pin(xr))) : double(fp_pin(xr)));
     *fl |= fp_end_flags();
     return std::bit_cast<uint64_t>(r);
 }
@@ -606,6 +599,23 @@ template<class F> static uint32_t fcmp(FloatBits<F> a, FloatBits<F> b, uint32_t 
     *fl |= invalid ? FFLAG_NV : 0;
     F fa = std::bit_cast<F>(a), fb = std::bit_cast<F>(b);
     return (funct3 == 0) ? (fa <= fb) : (funct3 == 1) ? (fa < fb) : (fa == fb);
+}
+
+// FCLASS: one bit, from 0 (-Inf) through 7 (+Inf) to 8 (signaling NaN) and 9 (quiet NaN)
+template<class F> static uint32_t fclass(FloatBits<F> a) {
+    using SF = FloatFormat<F>;
+    bool neg = a & SF::SIGN;
+    if (SF::is_nan(a)) {
+        return SF::is_snan(a) ? (1u << 8) : (1u << 9);
+    } else if (SF::is_inf(a)) {
+        return neg ? (1u << 0) : (1u << 7);
+    } else if (SF::is_zero(a)) {
+        return neg ? (1u << 3) : (1u << 4);
+    } else if (!(a & SF::INF)) { // subnormal
+        return neg ? (1u << 2) : (1u << 5);
+    } else {
+        return neg ? (1u << 1) : (1u << 6);
+    }
 }
 
 void rv64_fpu_op(Rv64SysHartState *h, uint32_t inst) {
@@ -676,38 +686,7 @@ void rv64_fpu_op(Rv64SysHartState *h, uint32_t inst) {
                     }
                 }
             } else { // FCLASS
-                uint32_t cls;
-                if (is_double) {
-                    uint64_t a = h->f_regs[r1];
-                    bool sign = a >> 63;
-                    uint64_t exp = (a >> 52) & 0x7FF, man = a & 0xFFFFFFFFFFFFFull;
-                    if ((exp == 0x7FF) && man) {
-                        cls = (a & 0x8000000000000ull) ? (1u << 9) : (1u << 8);
-                    } else if (exp == 0x7FF) {
-                        cls = sign ? (1u << 0) : (1u << 7);
-                    } else if ((exp == 0) && (man == 0)) {
-                        cls = sign ? (1u << 3) : (1u << 4);
-                    } else if (exp == 0) {
-                        cls = sign ? (1u << 2) : (1u << 5);
-                    } else {
-                        cls = sign ? (1u << 1) : (1u << 6);
-                    }
-                } else {
-                    uint32_t a = unbox32(h->f_regs[r1]);
-                    bool sign = a >> 31;
-                    uint32_t exp = (a >> 23) & 0xFF, man = a & 0x7FFFFF;
-                    if ((exp == 0xFF) && man) {
-                        cls = (a & 0x400000u) ? (1u << 9) : (1u << 8);
-                    } else if (exp == 0xFF) {
-                        cls = sign ? (1u << 0) : (1u << 7);
-                    } else if ((exp == 0) && (man == 0)) {
-                        cls = sign ? (1u << 3) : (1u << 4);
-                    } else if (exp == 0) {
-                        cls = sign ? (1u << 2) : (1u << 5);
-                    } else {
-                        cls = sign ? (1u << 1) : (1u << 6);
-                    }
-                }
+                uint32_t cls = is_double ? fclass<double>(h->f_regs[r1]) : fclass<float>(unbox32(h->f_regs[r1]));
                 if (r_dst) {
                     h->x_regs[r_dst] = cls;
                 }

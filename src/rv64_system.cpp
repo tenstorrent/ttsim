@@ -7,6 +7,7 @@
 #define XLEN 64
 #define RiscvHartState Rv64SysHartState
 #include "riscv_impl.h" // pulls in rv64_system.h
+#include "plic.h"
 
 #include <algorithm>
 #include <dlfcn.h>
@@ -64,7 +65,7 @@
 #define VIO_VENDOR 0x4d535454u // "TTSM"
 
 struct Uart16550 {
-    uint8_t dll, dlm, ier, fcr, lcr, mcr, scr;
+    uint8_t dll, dlm, ier, fcr, lcr;
     bool thr_ipending;
     uint8_t rx_fifo[UART_RX_FIFO_SIZE];
     uint32_t rx_head, rx_tail, rx_count;
@@ -99,8 +100,7 @@ struct RvSystem {
     uint32_t hart_quantum; // SMP round-robin slice (instructions per hart before yielding)
     uint32_t timer_insns_per_tick; // mtime advances once per this many retired instructions
     uint64_t insn_count; // all instructions executed (excludes a faulting fetch)
-    uint64_t visible_icount; // retired (drives mtime; includes cause-12 inst-page faults)
-    uint64_t cause12_count; // cause-12 inst-page faults; cycle/instret == visible - this
+    uint64_t visible_icount; // retired (drives mtime and cycle; a faulting fetch is not counted)
     uint64_t ecall_ebreak_count; // ECALL/EBREAK traps: counted in visible_icount, but they do not retire
 
     Rv64SysHartState harts[MAX_HARTS];
@@ -119,7 +119,6 @@ struct RvSystem {
     uint64_t disk_sectors;
     uint32_t vio_status;
     uint32_t vio_dev_feat_sel;
-    uint32_t vio_drv_feat_sel;
     uint32_t vio_queue_num;
     uint32_t vio_queue_ready;
     uint64_t vio_desc;
@@ -131,12 +130,7 @@ struct RvSystem {
 
     uint32_t rtc_latched_high;
 
-    uint32_t plic_priority[64];
-    uint32_t plic_pending[2];
-    uint32_t plic_level[2];
-    uint32_t plic_enable[2 * MAX_HARTS][2];
-    uint32_t plic_threshold[2 * MAX_HARTS];
-    uint32_t plic_claimed[2];
+    Plic plic;
 
     bool tt_active;
     uint64_t tt_bar_base[3];
@@ -190,6 +184,9 @@ RvSystem *rv64_sys_create(uint64_t dram_base, uint64_t dram_size, uint32_t num_h
     p_sys->dram_base = dram_base;
     p_sys->dram_size = dram_size;
     p_sys->num_harts = num_harts;
+    static_assert((2 * MAX_HARTS <= PLIC_MAX_CONTEXTS) && (PLIC_NDEV < PLIC_MAX_WORDS * 32), "PLIC too small");
+    p_sys->plic.num_sources = PLIC_NDEV;
+    p_sys->plic.num_contexts = 2 * num_harts; // M and S of each hart
     p_sys->hart_quantum = 100;
     p_sys->timer_insns_per_tick = timer_insns_per_tick;
     p_sys->dram = (uint8_t *)mmap(nullptr, dram_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -214,7 +211,7 @@ RvSystem *rv64_sys_create(uint64_t dram_base, uint64_t dram_size, uint32_t num_h
 }
 
 Rv64SysHartState *rv64_sys_hart(RvSystem *p_sys, uint32_t hart_id) {
-    TTSIM_VERIFY(hart_id < p_sys->num_harts, AssertionFailure, "hart_id=%u", hart_id);
+    TTSIM_ASSERT(hart_id < p_sys->num_harts, "hart_id=%u", hart_id);
     return &p_sys->harts[hart_id];
 }
 
@@ -422,8 +419,7 @@ static void uart_write(RvSystem *p_sys, uint32_t offset, uint8_t val) {
             break;
         case 2: u->fcr = val; break;
         case 3: u->lcr = val; break;
-        case 4: u->mcr = val; break;
-        case 7: u->scr = val; break;
+        case 4: case 7: break; // MCR, SCR: nothing reads them
         default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
     }
     uart_update_irq(p_sys); // THR/IER (and others) may have changed the pending THRE interrupt
@@ -516,39 +512,9 @@ static void uart_inject_pump(RvSystem *p_sys) {
     }
 }
 
-static uint32_t plic_num_contexts(RvSystem *p_sys) {
-    return 2 * p_sys->num_harts;
-}
-
-// Highest-priority enabled+pending source above this context's threshold (ties: lowest id),
-// skipping sources already claimed (in service). 0 = none.
-static int plic_best(RvSystem *p_sys, uint32_t ctx) {
-    int best = 0;
-    uint32_t best_pri = 0;
-    for (uint32_t s = 1; s <= PLIC_NDEV; s++) {
-        uint32_t w = s >> 5;
-        uint32_t bit = 1u << (s & 31);
-        if (!(p_sys->plic_pending[w] & bit)) {
-            continue;
-        }
-        if (!(p_sys->plic_enable[ctx][w] & bit)) {
-            continue;
-        }
-        if (p_sys->plic_claimed[w] & bit) {
-            continue;
-        }
-        uint32_t pri = p_sys->plic_priority[s];
-        if ((pri > p_sys->plic_threshold[ctx]) && (pri > best_pri)) {
-            best_pri = pri;
-            best = int(s);
-        }
-    }
-    return best;
-}
-
 static void plic_update(RvSystem *p_sys) {
-    for (uint32_t ctx = 0; ctx < plic_num_contexts(p_sys); ctx++) {
-        bool pend = plic_best(p_sys, ctx) != 0;
+    for (uint32_t ctx = 0; ctx < p_sys->plic.num_contexts; ctx++) {
+        bool pend = plic_best(&p_sys->plic, ctx) != 0;
         Rv64SysHartState *h = &p_sys->harts[ctx / 2];
         uint64_t bit = (ctx & 1) ? MIP_SEIP : MIP_MEIP;
         uint64_t old = h->mip;
@@ -563,101 +529,13 @@ static void plic_update(RvSystem *p_sys) {
     }
 }
 
-static uint64_t plic_read(RvSystem *p_sys, uint32_t offset) {
-    TTSIM_VERIFY(!(offset & 3), UnimplementedFunctionality, "misaligned offset=0x%x", offset);
-    if (offset < 0x1000) {
-        return (offset / 4 <= PLIC_NDEV) ? p_sys->plic_priority[offset / 4] : 0;
-    }
-    if ((offset >= 0x1000) && (offset < 0x1080)) {
-        uint32_t w = (offset - 0x1000) / 4;
-        return (w < 2) ? p_sys->plic_pending[w] : 0;
-    }
-    if ((offset >= 0x2000) && (offset < 0x2000 + 0x80 * 2 * MAX_HARTS)) {
-        uint32_t ctx = (offset - 0x2000) / 0x80;
-        uint32_t w = ((offset - 0x2000) % 0x80) / 4;
-        return ((ctx < plic_num_contexts(p_sys)) && (w < 2)) ? p_sys->plic_enable[ctx][w] : 0;
-    }
-    if (offset >= 0x200000) {
-        uint32_t ctx = (offset - 0x200000) / 0x1000;
-        uint32_t reg = (offset - 0x200000) % 0x1000;
-        if (ctx >= plic_num_contexts(p_sys)) {
-            return 0;
-        }
-        if (reg == 0) {
-            return p_sys->plic_threshold[ctx];
-        }
-        if (reg == 4) { // CLAIM
-            int s = plic_best(p_sys, ctx);
-            if (s) {
-                uint32_t w = uint32_t(s) >> 5;
-                uint32_t b = 1u << (uint32_t(s) & 31);
-                p_sys->plic_pending[w] &= ~b;
-                p_sys->plic_claimed[w] |= b;
-            }
-            plic_update(p_sys);
-            return uint32_t(s);
-        }
-    }
-    TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
-}
-
-static void plic_write(RvSystem *p_sys, uint32_t offset, uint64_t val) {
-    TTSIM_VERIFY(!(offset & 3), UnimplementedFunctionality, "misaligned offset=0x%x", offset);
-    if (offset < 0x1000) {
-        if (offset / 4 <= PLIC_NDEV) {
-            p_sys->plic_priority[offset / 4] = uint32_t(val);
-        }
-    } else if ((offset >= 0x2000) && (offset < 0x2000 + 0x80 * 2 * MAX_HARTS)) {
-        uint32_t ctx = (offset - 0x2000) / 0x80;
-        uint32_t w = ((offset - 0x2000) % 0x80) / 4;
-        if ((ctx < plic_num_contexts(p_sys)) && (w < 2)) {
-            p_sys->plic_enable[ctx][w] = uint32_t(val);
-        }
-    } else if (offset >= 0x200000) {
-        uint32_t ctx = (offset - 0x200000) / 0x1000;
-        uint32_t reg = (offset - 0x200000) % 0x1000;
-        if (ctx >= plic_num_contexts(p_sys)) {
-            return;
-        }
-        if (reg == 0) {
-            p_sys->plic_threshold[ctx] = uint32_t(val);
-        } else if (reg == 4) { // COMPLETE
-            uint32_t s = uint32_t(val);
-            if ((s >= 1) && (s <= PLIC_NDEV)) {
-                uint32_t w = s >> 5;
-                uint32_t b = 1u << (s & 31);
-                p_sys->plic_claimed[w] &= ~b;
-                // Gateway re-pends if the source line is still asserted at completion (level source).
-                if (p_sys->plic_level[w] & b) {
-                    p_sys->plic_pending[w] |= b;
-                }
-            }
-        }
-    } else {
-        TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
-    }
-    plic_update(p_sys);
-}
-
 void rv64_sys_set_irq(RvSystem *p_sys, uint32_t source, bool level) {
-    uint32_t w = source >> 5;
-    uint32_t b = 1u << (source & 31);
-    if (level) {
-        p_sys->plic_level[w] |= b;
-        p_sys->plic_pending[w] |= b; // pending held until the interrupt is claimed, even if deasserted
-    } else {
-        p_sys->plic_level[w] &= ~b;
-    }
+    plic_set_level(&p_sys->plic, source, level);
     plic_update(p_sys);
 }
 
 void rv64_sys_set_interactive(RvSystem *p_sys) {
     interactive_serial_enable(&p_sys->uart);
-}
-
-void rv64_sys_set_hart_quantum(RvSystem *p_sys, uint32_t q) {
-    TTSIM_VERIFY(q, ConfigurationError, "invalid hart_quantum=%d", q);
-    p_sys->hart_quantum = q;
 }
 
 void rv64_sys_uart_inject(RvSystem *p_sys, uint64_t at, const uint8_t *data, size_t len) {
@@ -860,7 +738,7 @@ static void virtio_write(RvSystem *p_sys, uint64_t paddr, uint32_t val) {
     switch (off) {
         case 0x014: p_sys->vio_dev_feat_sel = val; break; // (Host/Device)FeaturesSel
         case 0x020: break; // (Guest/Driver)Features (accepted)
-        case 0x024: p_sys->vio_drv_feat_sel = val; break; // (Guest/Driver)FeaturesSel
+        case 0x024: break; // (Guest/Driver)FeaturesSel (accepted)
         case 0x030: break; // QueueSel (only queue 0)
         case 0x038: p_sys->vio_queue_num = val; break; // QueueNum
         case 0x050: virtio_blk_process(p_sys); break; // QueueNotify
@@ -978,7 +856,9 @@ static uint64_t device_read(RvSystem *p_sys, uint64_t paddr, uint32_t size) {
     }
     if ((paddr >= PLIC_BASE) && (paddr < PLIC_BASE + PLIC_SIZE)) {
         TTSIM_VERIFY(size == 4, UnimplementedFunctionality, "plic read size=%d", size);
-        return plic_read(p_sys, paddr - PLIC_BASE);
+        uint32_t val = plic_read(&p_sys->plic, uint32_t(paddr - PLIC_BASE));
+        plic_update(p_sys); // a claim takes its source out of the running
+        return val;
     }
     if ((paddr >= VIRTIO_BASE) && (paddr < VIRTIO_BASE + VIRTIO_SIZE)) {
         TTSIM_VERIFY(size == 4, UnimplementedFunctionality, "virtio read size=%d", size);
@@ -1018,7 +898,8 @@ static void device_write(RvSystem *p_sys, uint64_t paddr, uint32_t size, uint64_
     }
     if ((paddr >= PLIC_BASE) && (paddr < PLIC_BASE + PLIC_SIZE)) {
         TTSIM_VERIFY(size == 4, UnimplementedFunctionality, "plic write size=%d", size);
-        return plic_write(p_sys, paddr - PLIC_BASE, val);
+        plic_write(&p_sys->plic, uint32_t(paddr - PLIC_BASE), uint32_t(val));
+        return plic_update(p_sys);
     }
     if ((paddr >= VIRTIO_BASE) && (paddr < VIRTIO_BASE + VIRTIO_SIZE)) {
         TTSIM_VERIFY(size == 4, UnimplementedFunctionality, "virtio write size=%d", size);
@@ -1458,7 +1339,7 @@ void rv64_sys_lr_reserve(Rv64SysHartState *h, uint64_t vaddr, uint32_t size) {
     uint64_t paddr;
     bool page_ok;
     if (!translate(h, vaddr, MemAccess::Load, size, &paddr, &page_ok)) { // cannot fault here; defensive
-        TTSIM_ERROR(AssertionFailure, "unexpected fault");
+        TTSIM_UNREACHABLE("unexpected fault");
     }
     h->reservation_paddr = paddr;
     uint64_t pa_page = paddr & ~0xFFFull;
@@ -1611,8 +1492,8 @@ uint64_t rv64_sys_read_csr(Rv64SysHartState *h, uint32_t csr, bool *ok) {
         case CSR_SCOUNTEREN: return h->scounteren;
         case CSR_SENVCFG: return h->senvcfg;
         case CSR_TIME: return mtime_now(h->p_sys);
-        case CSR_CYCLE: return h->p_sys->visible_icount - h->p_sys->cause12_count;
-        case CSR_INSTRET: return h->p_sys->visible_icount - h->p_sys->cause12_count - h->p_sys->ecall_ebreak_count;
+        case CSR_CYCLE: return h->p_sys->visible_icount;
+        case CSR_INSTRET: return h->p_sys->visible_icount - h->p_sys->ecall_ebreak_count;
         case CSR_FFLAGS: return h->fcsr & 0x1F;
         case CSR_FRM: return (h->fcsr >> 5) & 7;
         case CSR_FCSR: return h->fcsr & 0xFF;
@@ -1774,7 +1655,6 @@ void rv64_sys_raise(Rv64SysHartState *h, uint64_t cause, uint64_t tval) {
         h->p_sys->ecall_ebreak_count++; // still counted for cycle and mtime, as before
         uint64_t pc = current_insn_pc(h);
         uint64_t npc = pc;
-        [[maybe_unused]] int old_prv = h->priv;
         take_trap(h, &npc, cause, tval, false);
         h->trap_pending = true;
         h->trap_npc = npc;
@@ -1958,12 +1838,9 @@ static void take_trap(Rv64SysHartState *p_hart, uint64_t *npc, uint64_t cause, u
 // Raise a synchronous exception. Callers must stop mutating architectural
 // state once trap_pending is set; the main loop handles final accounting.
 static void fault(Rv64SysHartState *p_hart, uint64_t cause, uint64_t tval) {
-    uint64_t fault_pc = current_insn_pc(p_hart);
-    uint64_t npc = fault_pc;
-    [[maybe_unused]] int old_prv = p_hart->priv;
+    uint64_t npc = current_insn_pc(p_hart);
     take_trap(p_hart, &npc, cause, tval, false);
     p_hart->trap_pending = true;
-    p_hart->trap_pc = fault_pc;
     p_hart->trap_npc = npc;
     if ((cause != EXC_INST_PAGE_FAULT) && (cause != EXC_INST_ACCESS)) { // for anything but an instruction fetch fault...
         g_sys.visible_icount--; // cancel out the later increment
@@ -2085,7 +1962,7 @@ static Rv64SysHartState *scheduler_choose_hart(Rv64SysHartState *p_current_hart,
             return p_hart;
         }
     }
-    TTSIM_ERROR(AssertionFailure, "all harts sleeping with no scheduled interrupt");
+    TTSIM_ERROR(UnsupportedFunctionality, "all harts sleeping with no scheduled interrupt");
 }
 
 static void clint_refresh_irq(Rv64SysHartState *p_hart) {
@@ -2129,23 +2006,20 @@ static void check_interrupts(Rv64SysHartState *p_hart) {
     }
 
     int cause = -1;
-    {
-        if (all & ~p_hart->mideleg) {
-            all &= ~p_hart->mideleg; // interrupts to M-mode go first
-        }
-        static const int pri[] = {11, 3, 7, 9, 1, 5}; // MEI, MSI, MTI, SEI, SSI, STI
-        for (size_t i = 0; i < std::size(pri); i++) {
-            if (all & (1ull << pri[i])) {
-                cause = pri[i];
-                break;
-            }
+    if (all & ~p_hart->mideleg) {
+        all &= ~p_hart->mideleg; // interrupts to M-mode go first
+    }
+    static const int pri[] = {11, 3, 7, 9, 1, 5}; // MEI, MSI, MTI, SEI, SSI, STI
+    for (size_t i = 0; i < std::size(pri); i++) {
+        if (all & (1ull << pri[i])) {
+            cause = pri[i];
+            break;
         }
     }
     if (cause < 0) {
         return;
     }
     uint64_t npc = current_insn_pc(p_hart);
-    [[maybe_unused]] int old_prv = p_hart->priv;
     take_trap(p_hart, &npc, uint64_t(cause), 0, true);
     p_hart->pc = npc;
 }
@@ -2180,7 +2054,7 @@ void rv64_sys_run(RvSystem *p_sys, uint64_t max_insns) {
                 uint64_t pa = 0;
                 uint8_t *p = translate_host_cached(p_hart, p_hart->pc, false, &pa);
                 if (!p) [[unlikely]] {
-                    TTSIM_VERIFY(p_hart->trap_pending, AssertionFailure, "fetch failed without a fault: pa=0x%lx", pa);
+                    TTSIM_ASSERT(p_hart->trap_pending, "fetch failed without a fault: pa=0x%lx", pa);
                     break;
                 }
             }
@@ -2190,7 +2064,7 @@ void rv64_sys_run(RvSystem *p_sys, uint64_t max_insns) {
                 uint64_t pa = 0;
                 uint8_t *p = translate_host_cached(p_hart, p_hart->pc + 2, true, &pa);
                 if (!p) [[unlikely]] {
-                    TTSIM_VERIFY(p_hart->trap_pending, AssertionFailure, "fetch failed without a fault: pa=0x%lx", pa);
+                    TTSIM_ASSERT(p_hart->trap_pending, "fetch failed without a fault: pa=0x%lx", pa);
                     break;
                 }
                 uint16_t hw1 = mem_rd<uint16_t>(p_itlb->host_page);
@@ -2222,8 +2096,8 @@ void rv64_sys_run(RvSystem *p_sys, uint64_t max_insns) {
             p_hart->itlb[0].vpn = ~uint64_t(0);
         }
         if (p_hart->trap_pending) [[unlikely]] {
-            TTSIM_VERIFY(!p_hart->wfi_retired, AssertionFailure, "should not have WFI retired with trap pending");
-            TTSIM_VERIFY(!p_hart->pc_adjust, AssertionFailure, "should not have PC adjust set with trap pending");
+            TTSIM_ASSERT(!p_hart->wfi_retired, "should not have WFI retired with trap pending");
+            TTSIM_ASSERT(!p_hart->pc_adjust, "should not have PC adjust set with trap pending");
             p_hart->pc = p_hart->trap_npc;
             p_hart->trap_pending = false;
             continue;

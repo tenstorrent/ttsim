@@ -2759,6 +2759,28 @@
     "size": 32,
     "name": "PRNG_SEED_Seed_Val"
    }
+  ],
+  "186": [
+   {
+    "shift": 0,
+    "size": 3,
+    "name": "RISC_PREFETCH_CTRL_Enable_Trisc"
+   },
+   {
+    "shift": 3,
+    "size": 1,
+    "name": "RISC_PREFETCH_CTRL_Enable_Brisc"
+   },
+   {
+    "shift": 4,
+    "size": 1,
+    "name": "RISC_PREFETCH_CTRL_Enable_NocRisc"
+   },
+   {
+    "shift": 5,
+    "size": 8,
+    "name": "RISC_PREFETCH_CTRL_Max_Req_Count"
+   }
   ]
  }
 }

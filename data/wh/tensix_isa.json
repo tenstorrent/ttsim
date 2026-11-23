@@ -367,7 +367,8 @@
    "ch0_y": "11:9",
    "ch1_x": "14:12",
    "ch1_y": "17:15",
-   "cnt_set_mask": "23:21"
+   "cnt_set_mask": "23:21",
+   "thread_override": "19:18"
   }
  },
  "INCADCXY": {
@@ -377,7 +378,8 @@
    "ch0_y": "11:9",
    "ch1_x": "14:12",
    "ch1_y": "17:15",
-   "cnt_set_mask": "23:21"
+   "cnt_set_mask": "23:21",
+   "thread_override": "19:18"
   }
  },
  "ADDRCRXY": {
@@ -388,7 +390,8 @@
    "ch0_y": "11:9",
    "ch1_x": "14:12",
    "ch1_y": "17:15",
-   "cnt_set_mask": "23:21"
+   "cnt_set_mask": "23:21",
+   "thread_override": "19:18"
   }
  },
  "SETADCZW": {
@@ -399,7 +402,8 @@
    "ch0_w": "11:9",
    "ch1_z": "14:12",
    "ch1_w": "17:15",
-   "cnt_set_mask": "23:21"
+   "cnt_set_mask": "23:21",
+   "thread_override": "19:18"
   }
  },
  "INCADCZW": {
@@ -409,7 +413,8 @@
    "ch0_w": "11:9",
    "ch1_z": "14:12",
    "ch1_w": "17:15",
-   "cnt_set_mask": "23:21"
+   "cnt_set_mask": "23:21",
+   "thread_override": "19:18"
   }
  },
  "ADDRCRZW": {
@@ -420,7 +425,8 @@
    "ch0_w": "11:9",
    "ch1_z": "14:12",
    "ch1_w": "17:15",
-   "cnt_set_mask": "23:21"
+   "cnt_set_mask": "23:21",
+   "thread_override": "19:18"
   }
  },
  "SETDVALID": {

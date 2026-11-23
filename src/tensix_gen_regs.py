@@ -26,6 +26,8 @@ def main():
             f.write(' \\\n'.join(f'    _({addr})' for addr in regs))
             f.write('\n\n')
             for (addr, fields) in regs.items():
+                for field in fields:
+                    f.write(f'#define {field["name"]}_ADDR32 {addr}\n') # as cfg_defines.h names the field's register
                 f.write(f'#define {group.upper()}{addr}_REG_UNION() \\\n')
                 f.write('    union { \\\n')
                 f.write('        struct { \\\n')

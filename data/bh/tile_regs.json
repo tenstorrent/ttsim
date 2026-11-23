@@ -194,6 +194,7 @@
   "regs": [
     {
       "name": "riscv_tdma_regs",
+      "word_size": 4,
       "regs": [
         {
           "offset": "0x0",
@@ -301,6 +302,7 @@
     },
     {
       "name": "riscv_debug_regs",
+      "word_size": 4,
       "regs": [
         {
           "offset": "0x0",
@@ -906,6 +908,7 @@
     },
     {
       "name": "noc_regs",
+      "word_size": 4,
       "regs": [
         {
           "offset": "0x0",
@@ -1255,6 +1258,7 @@
     },
     {
       "name": "tensix_regfile",
+      "word_size": 4,
       "regs": [
         {
           "offset": "0x0",
@@ -1268,6 +1272,7 @@
     },
     {
       "name": "tensix_pc_buf",
+      "word_size": 4,
       "regs": [
         {
           "offset": "0x0",
@@ -1299,6 +1304,7 @@
     },
     {
       "name": "tensix_mop_cfg",
+      "word_size": 4,
       "regs": [
         {
           "offset": "0x0",
@@ -1439,6 +1445,7 @@
     },
     {
       "name": "reset_unit",
+      "word_size": 4,
       "regs": [
         {
           "offset": "0x60",
@@ -1464,5 +1471,7 @@
         }
       ]
     }
-  ]
+  ],
+  "blocks": [],
+  "maps": []
 }

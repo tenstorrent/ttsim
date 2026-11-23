@@ -29,11 +29,14 @@ def rules(ctx):
     if ctx.env.get('COLOR') == '1':
         compile_opts += ['-fdiagnostics-color=always']
     if ctx.host.arch == 'x86_64':
-        compile_opts += ['-march=x86-64-v3']
-    config_compile_opts = {
-        'debug': ['-g', '-Og', '-DDEBUG'],
-        'release': ['-O2'],
-    }
+        # X86_64_V4=1: AVX-512, for hosts that have it (release builds stay on x86-64-v3)
+        compile_opts += ['-march=x86-64-v4' if ctx.env.get('X86_64_V4') == '1' else '-march=x86-64-v3']
+    # DEBUG=1: debug info, light optimization, and no stripping, in the same output directories
+    debug = ctx.env.get('DEBUG') == '1'
+    compile_opts += ['-g', '-Og'] if debug else ['-O2']
+
+    # Each chip or system builds into _out/<config>/, plus variants of it in _out/<config><suffix>/
+    flavors = [''] # directory suffixes
     so_link_opts = ['-shared']
     if ctx.host.os != 'darwin':
         so_link_opts += ['-Wl,-Bsymbolic', '-Wl,--no-undefined']
@@ -74,11 +77,10 @@ def rules(ctx):
     # Everything but sim.cpp, which holds the chip count, is built once per chip and shared by its configs.
     shared_o_files = {}
     for (tt_arch_version, chip) in CHIPS:
-        for config in config_compile_opts:
-            out_dir = f'_out/{config}_{chip}'
+        for flavor in flavors:
+            out_dir = f'_out/{chip}{flavor}'
             gcc_opts = [
                 *compile_opts,
-                *config_compile_opts[config],
                 f'-DTT_ARCH_VERSION={tt_arch_version}',
                 f'-I_out/{chip}',
             ]
@@ -92,18 +94,18 @@ def rules(ctx):
                 cmd = ['g++', *gcc_opts, '-c', file, '-o', o_file]
                 ctx.rule(o_file, file, cmd=cmd, depfile=d_file, order_only_inputs=chip_gen_h_files[chip])
                 o_files += [o_file]
-            shared_o_files[config, chip] = o_files
+            shared_o_files[chip, flavor] = o_files
 
     build_targets = []
+    old_path_targets = []
     for (tt_arch_version, chip, data_chip, num_chips, num_mmio_chips, num_mem_chips) in CONFIGS:
         if chip == 'bh_x32' and ctx.host.arch != 'x86_64':
             continue # -mcmodel=medium is x86_64 only; bh_x32 BSS of ~6.9GB is too large for aarch64
 
-        for config in config_compile_opts:
-            out_dir = f'_out/{config}_{chip}'
+        for flavor in flavors:
+            out_dir = f'_out/{chip}{flavor}'
             gcc_opts = [
                 *compile_opts,
-                *config_compile_opts[config],
                 f'-DTT_ARCH_VERSION={tt_arch_version}',
                 f'-DNUM_CHIPS={num_chips}',
                 f'-DNUM_MMIO_CHIPS={num_mmio_chips}',
@@ -118,7 +120,7 @@ def rules(ctx):
             d_file = o_file.replace('.o', '.d')
             cmd = ['g++', *gcc_opts, '-c', 'sim.cpp', '-o', o_file]
             ctx.rule(o_file, 'sim.cpp', cmd=cmd, depfile=d_file, order_only_inputs=chip_gen_h_files[data_chip])
-            o_files = [*shared_o_files[config, data_chip], o_file]
+            o_files = [*shared_o_files[data_chip, flavor], o_file]
 
             target = f'{out_dir}/libttsim.so'
             link_so_deps = o_files
@@ -126,17 +128,18 @@ def rules(ctx):
             if ctx.host.os != 'darwin':
                 link_so_deps += ['libttsim.map']
                 cmd += ['-Wl,--version-script=libttsim.map']
-                if config != 'debug':
+                if not debug:
                     cmd += ['-Wl,--strip-all']
             ctx.rule(target, link_so_deps, cmd=cmd)
             build_targets += [target]
+            if not flavor:
+                old_path_targets += [target]
 
     # Standalone full-system riscv64 simulator, aka ttsim-riscv64
-    for config in config_compile_opts:
-        out_dir = f'_out/{config}_riscv64'
+    for flavor in flavors:
+        out_dir = f'_out/riscv64{flavor}'
         gcc_opts = [
             *compile_opts,
-            *config_compile_opts[config],
             '-DTTSIM_RV64_SYSTEM=1',
             '-frounding-math', # for hostfp, do not assume the default rounding mode
         ]
@@ -152,5 +155,17 @@ def rules(ctx):
         cmd = ['g++', *o_files, '-o', target]
         ctx.rule(target, o_files, cmd=cmd)
         build_targets += [target]
+        if not flavor:
+            old_path_targets += [target]
+
+    # The old output paths, _out/release_<config>/, copied from the new ones so that existing scripts and docs keep
+    # working for now. To be removed.
+    old_flavor = ''
+    for target in old_path_targets:
+        (_, out_dir, name) = target.split('/')
+        src = f'_out/{out_dir}{old_flavor}/{name}'
+        old_target = f'_out/release_{out_dir}/{name}'
+        ctx.rule(old_target, src, cmd=['cp', src, old_target])
+        build_targets += [old_target]
 
     ctx.rule(':build', build_targets)

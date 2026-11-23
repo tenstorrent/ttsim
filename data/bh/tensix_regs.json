@@ -1547,6 +1547,13 @@
     "name": "TILE_FACE_SET_MAPPING_0_face_set_mapping_15"
    }
   ],
+  "40": [
+   {
+    "shift": 0,
+    "size": 1,
+    "name": "PACK_GLOBAL_CFG_CTL_pack_disable_fast_tile_end_drain"
+   }
+  ],
   "50": [
    {
     "shift": 0,
@@ -2447,6 +2454,28 @@
     "shift": 0,
     "size": 32,
     "name": "PRNG_SEED_Seed_Val"
+   }
+  ],
+  "208": [
+   {
+    "shift": 0,
+    "size": 3,
+    "name": "RISC_PREFETCH_CTRL_Enable_Trisc"
+   },
+   {
+    "shift": 3,
+    "size": 1,
+    "name": "RISC_PREFETCH_CTRL_Enable_Brisc"
+   },
+   {
+    "shift": 4,
+    "size": 1,
+    "name": "RISC_PREFETCH_CTRL_Enable_NocRisc"
+   },
+   {
+    "shift": 5,
+    "size": 8,
+    "name": "RISC_PREFETCH_CTRL_Max_Req_Count"
    }
   ],
   "209": [

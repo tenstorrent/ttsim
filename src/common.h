@@ -39,17 +39,19 @@ enum class TTSimErrorCategory {
     } while (0)
 
 // Use ASSERT instead of VERIFY only in cases where a sufficiently smart compiler could
-// prove that the condition will never be violated.
-#if defined(DEBUG)
-#define TTSIM_ASSERT(cond) \
+// prove that the condition will never be violated. The message is optional; without one,
+// the condition is printed.
+#define TTSIM_ASSERT(cond, ...) \
     do { \
         if (!(cond)) [[unlikely]] { \
-            ttsim_error(TTSimErrorCategory::AssertionFailure, __func__, "%s\n", #cond); \
+            TTSIM_ASSERT_FAILED##__VA_OPT__(_MSG)(#cond __VA_OPT__(,) __VA_ARGS__); \
         } \
     } while (0)
-#else
-#define TTSIM_ASSERT(cond) do {} while (0)
-#endif
+#define TTSIM_ASSERT_FAILED(cond_str) TTSIM_ERROR(AssertionFailure, "%s", cond_str)
+#define TTSIM_ASSERT_FAILED_MSG(cond_str, ...) TTSIM_ERROR(AssertionFailure, __VA_ARGS__)
+
+// Code that can never be reached, e.g. the default of a switch whose cases cover every value.
+#define TTSIM_UNREACHABLE(fmt, ...) TTSIM_ERROR(AssertionFailure, fmt, ##__VA_ARGS__)
 
 // Bitfield extracts analogous to Verilog x[hi:lo] notation
 // Avoiding actual "class T" template arg to optimize compile times
